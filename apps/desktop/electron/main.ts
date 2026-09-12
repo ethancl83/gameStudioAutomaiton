@@ -777,9 +777,10 @@ async function createWindow(): Promise<void> {
   });
 
   // IPC 신뢰 판정에 쓸 창의 webContents 신원을 기록한다(이 창에서 온 호출만 특권 작업 수행).
-  mainWindowId = win.webContents.id;
+  const windowId = win.webContents.id;
+  mainWindowId = windowId;
   win.on('closed', () => {
-    if (mainWindowId === win.webContents.id) mainWindowId = null;
+    if (mainWindowId === windowId) mainWindowId = null;
   });
 
   win.once('ready-to-show', () => win.show());
@@ -790,8 +791,12 @@ async function createWindow(): Promise<void> {
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (event, url) => {
-    const isDev = DEV_SERVER_URL && url.startsWith(DEV_SERVER_URL);
-    if (!isDev) event.preventDefault();
+    // 모드 전환의 location.reload()도 이 이벤트를 거친다. IPC와 같은 진입 URL
+    // 계약을 적용해 앱 자체의 재로딩은 허용하고 다른 페이지 이동은 차단한다.
+    if (!isTrustedFrameUrl(url, {
+      devServerUrl: DEV_SERVER_URL,
+      entryUrl: DEV_SERVER_URL ? null : PACKAGED_ENTRY_URL,
+    })) event.preventDefault();
   });
 
   if (DEV_SERVER_URL) {

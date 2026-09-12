@@ -7,6 +7,7 @@ Last Updated: 2026-09-13
 - 유효 계획: [v7](app-operations-platform-plan-v7.md) → [tasks](app-operations-platform-tasks.md) → 이 context. v1–v6는 이력으로 보존한다.
 - 사용자 확정: 등록/화면 진입으로 AI를 시작하지 않는다. 채팅 또는 화면의 AI 요청 버튼으로만 시작한다. 버튼은 현재 화면과 선택한 프로젝트/계정을 전달한다. 클리어 전 native CLI ID로 resume, 클리어 뒤 다음 요청만 새 세션이다.
 - 완료: Phase 15 요청 기반 CLI/MCP 도구·채팅·화면 버튼·자료 결과와 검증. 프로젝트별 대화와 전체 운영 대화는 각각 native ID/제공자/대화/요청 범위를 SQLite에 저장한다. 제공자 고정, ID 누락 시 새 세션 fallback 차단, clear 중 재요청 차단과 늦은 콜백 격리, 새 작업 디렉터리를 적용했다.
+- 2026-09-13 후속: Electron 탐색 차단이 자체 reload까지 막던 모드 전환 멈춤을 수정했다. `main.ts`에서 기존 신뢰 URL 판정을 재사용한다. `scripts/verify-desktop-mode.mjs`가 실제 IPC/페이지 재로딩/모드 분리를 검증한다(수정 전 5초 실패, 수정 후 40~393ms). 관련 23/23·타입·빌드 통과, 일반 앱 재실행 완료. [검증과 재현](../../../docs/verification.md#2026-09-13-electron-모드-전환-멈춤). 이 수정의 남은 항목은 없으며 기존 장기 수용 범위는 그대로다.
 - 등록 요청 범위: 실제 프로젝트 근거·문구·PNG 생성, 기존 계정/앱 매핑·큐 재사용. 문구 반영과 이미지 업로드 근거가 있어야 등록 완료다. 브라우저/이미지 도구는 CLI 설정을 활용하며 도구 부재·로그인·계약·알 수 없는 필수값만 요청한다. 원본 수정·빌드·심사·공개·광고·SNS 전송은 제외한다.
 - 수정 파일 이유: packages/agent는 실행·이벤트·MCP·자료/이미지 검증, controller/agent는 영속 세션·도구/실행 경계, service/server/storage는 수명주기·API·저장, AgentPanel/AgentActions/App와 각 view는 채팅·요청과 선택 전달, Electron security는 새 API 경로다. main의 기존 isTrustedSender 무한 재귀는 실제 native IPC 실패를 재현한 뒤 isTrustedFrame으로 고쳤다.
 - 검증: 관련 25/25, 타입·빌드 통과. 전체 451개: 409 pass / 36 fail / 6 skip. 깨끗한 HEAD 434개: 392 pass / 동일 36 fail / 6 skip. 신규 실패 0; 전체 성공으로 간주하지 않는다. macOS Electron 실제 창에서 버튼·선택·채팅·클리어·재기동 보존·PNG 결과·배치를 확인했다. [근거](../../../docs/verification-assets/ai-requests-20260913.md).

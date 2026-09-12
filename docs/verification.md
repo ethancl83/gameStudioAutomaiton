@@ -1,8 +1,18 @@
 # 구현 검증 기록
 
-Last Updated: 2026-09-13 (AI 요청·대화; 아래 기록은 과거 체크포인트)
+Last Updated: 2026-09-13 (모드 전환 멈춤 수정; 아래 기록은 과거 체크포인트)
 
 [계획 v7](../dev/active/app-operations-platform/app-operations-platform-plan-v7.md) · [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md) · [맥락](../dev/active/app-operations-platform/app-operations-platform-context.md) · [실제 지원 범위](integration-capabilities.md)
+
+## 2026-09-13 Electron 모드 전환 멈춤
+
+운영 빌드에서 `will-navigate`가 모드 전환의 `location.reload()`까지 차단해 “모드 전환 중” 화면에 머물렀다. 실제 앱에서 8초 이후에도 이전 화면이 남고 탐색 이벤트의 `defaultPrevented`가 true인 것을 확인했다. 같은 시점의 실제/데모 상태 조회는 3~9ms였다. 탐색에도 기존 IPC의 신뢰 URL 판정을 적용해 정확한 앱 진입 화면의 재로딩을 허용했다.
+
+- [네이티브 회귀 검사](../scripts/verify-desktop-mode.mjs): `npm run build` 후 `node scripts/verify-desktop-mode.mjs`. 별도 임시 데이터·실제 제어 서비스·Electron 창을 사용한다. 수정 전 실제 모드 전환이 5초 제한으로 실패했고 수정 후 실제→데모 반복 전환 4회가 **60/393/120/40ms**로 통과했다. 확인창 결과만 대역으로 주입하며 CLI와 외부 공급자는 호출하지 않는다.
+- 취소 시 페이지/모드 보존, 승인 시 새 페이지 생성, 화면·HTTP 데이터의 모드 일치, 반대 모드 요청 거부, 외부/다른 로컬 페이지 탐색 차단을 확인했다.
+- `node --import tsx --test tests/desktop-mode.test.ts tests/desktop-security.test.ts`: **23/23**. 타입 검사·빌드 통과. 전체 검사는 이번 변경에서 재실행하지 않았으며 기존 Mac 실패 기준선은 아래 AI 검증 기록에 있다.
+- 수정한 일반 앱을 재실행했다. 기존 모달 포털 관련 사용자 변경은 수정하지 않았다.
+- 네이티브 종료 검사에서 확인한 창 종료 후 `webContents` 접근도 제거했다. 창 ID를 생성 시 보관해 종료 시점에는 파괴된 객체를 읽지 않는다.
 
 ## 2026-09-13 AI 요청·대화 세션
 
