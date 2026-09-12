@@ -31,6 +31,7 @@ import { remoteBuild } from './remote-build.js';
 import { addMedia, mediaArtifact } from './media.js';
 import { Preparation } from './preparation.js';
 import { ProjectIntegrations } from './project-integrations.js';
+import { ProjectAgent, type AgentOptions } from './agent.js';
 
 const now = () => new Date().toISOString();
 const activeStatuses = new Set(['queued', 'running', 'retry_wait']);
@@ -46,12 +47,14 @@ interface ConnectionCommit { connection: Connection; marker: string; event: Para
 const commitField = '_appOpsCommit';
 const publicCredentialFields = (credentials: Record<string, string>) => Object.keys(credentials).filter(key => key !== commitField);
 export interface ServiceOptions {
+  agent?: AgentOptions;
   connectors?: Connector[]; fetch?: typeof fetch; scanToolchains?: typeof scanToolchains;
   mode?: 'demo' | 'live';
   backupVaultFactory?: (directory: string) => CredentialVault;
 }
 
 export class AppService {
+  readonly agent: ProjectAgent;
   readonly queue: JobQueue;
   readonly scheduler: AutomationScheduler;
   readonly buildKeys: BuildKeyManager;
@@ -79,7 +82,7 @@ export class AppService {
     this.mutations++;let released=false;return()=>{if(!released){released=true;this.mutations--;}};
   }
   async withMaintenance<T>(task:()=>Promise<T>,retain=false):Promise<T>{
-    if(this.maintenance||this.mutations>1||this.locks.size||this.queue.activeCount||this.store.list<Project>('project').some(p=>this.integrations.isBusy(p.id))||this.preparation.isInstalling())throw new AppError('MAINTENANCE_BUSY','진행 중인 작업이나 설치가 끝난 뒤 백업·복구를 시작해 주세요.',409);
+    if(this.maintenance||this.mutations>1||this.locks.size||this.queue.activeCount||this.agent.busy||this.store.list<Project>('project').some(p=>this.integrations.isBusy(p.id))||this.preparation.isInstalling())throw new AppError('MAINTENANCE_BUSY','진행 중인 작업이나 설치가 끝난 뒤 백업·복구를 시작해 주세요.',409);
     this.maintenance=true;this.queue.pause();this.pipelines.stop();
     let keep=false;
     try{await this.scheduler.stop();await this.operations.stop();const result=await task();keep=retain;return result;}
@@ -91,6 +94,7 @@ export class AppService {
   }
 
   constructor(readonly store: Store, readonly vault: CredentialVault, private readonly options: ServiceOptions = {}) {
+    this.agent = new ProjectAgent(this, options.mode ?? 'live', options.agent);
     this.connectors = options.connectors ?? builtinConnectors;
     this.buildKeys = new BuildKeyManager(store, vault);
     this.operations = new Operations(store, this, options.mode ?? 'live');
@@ -108,6 +112,7 @@ export class AppService {
       reconcile: id => this.reconcile(id), socialCycle: () => this.social.cycle(), supported: (provider, operation) => this.connectors.some(c => c.capability.provider === provider && c.capability.operations.includes(operation)) });
   }
   async start(): Promise<void> {
+    this.agent.recover();
     await this.buildKeys.cleanup();
     await this.recoverConnectionCommits();
     await this.integrations.recover();
@@ -118,7 +123,7 @@ export class AppService {
     this.scheduler.start();
     this.store.addEvent({ kind: 'controller.started', message: '운영 제어 서비스를 시작했습니다.' });
   }
-  async stop(): Promise<void> { this.closing=true;this.pipelines.stop(); await this.backups.close(); await this.preparation.close(); await this.operations.stop(); await this.scheduler.stop(); await this.queue.stop(); }
+  async stop(): Promise<void> { this.closing=true;this.pipelines.stop(); await this.agent.close(); await this.backups.close(); await this.preparation.close(); await this.operations.stop(); await this.scheduler.stop(); await this.queue.stop(); }
   async refreshTools(): Promise<Toolchain[]> {
     this.toolchains = await (this.options.scanToolchains ?? scanToolchains)(this.preparation.toolPaths());
     return this.toolchains;
@@ -252,6 +257,7 @@ export class AppService {
     if (!this.project(id).relinkRequired) this.integrations.assertAvailable(id);
     this.project(id);
     this.requireResolvedEffects(run => run.projectId === id);
+    await this.agent.remove(id);
     for (const run of this.store.runs(10_000).filter(r => r.projectId === id && activeStatuses.has(r.status))) this.queue.cancel(run.id);
     for (const schedule of this.social.listSchedules().filter(schedule => schedule.projectId === id && schedule.status === 'scheduled')) {
       this.store.put('social-schedule', schedule.id, { ...schedule, status: 'cancelled', updatedAt: now() });

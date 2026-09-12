@@ -56,6 +56,7 @@ import type {
 } from '../../../packages/backup/types';
 
 export type { ApiResult };
+import type { AgentRequestContext, AgentSettings, AgentState, AgentTask } from '../../../packages/agent/types';
 export type StoreProvider = 'google-play' | 'app-store' | 'steam';
 // GET /projects/:id/integration 응답(루트 구현). previewId/applyId로 상관한다.
 export interface ProjectIntegrationState {
@@ -101,6 +102,13 @@ function readStoredMode(): RuntimeMode {
 // 전체 새로고침(location.reload)하여 새 인스턴스를 만드므로, 이전 모드의 stale promise가 새 트리로
 // 들어가거나 다른 모드에 쓰기를 보내는 일이 원천적으로 불가능하다.
 export class ApiClient {
+  agentState() { return this.request<AgentState>('GET', '/agent'); }
+  saveAgentSettings(settings: AgentSettings) { return this.request<AgentSettings>('PUT', '/agent/settings', settings); }
+  requestAgent(context: AgentRequestContext & { message?: string }) { return this.request<AgentTask>('POST', '/agent/requests', context); }
+  clearAgent(id: string) { return this.request<AgentTask>('POST', `/agent/${encodeURIComponent(id)}/clear`, {}); }
+  resumeAgent(id: string, answer = '') { return this.request<AgentTask>('POST', `/agent/${encodeURIComponent(id)}/resume`, { answer }); }
+  cancelAgent(id: string) { return this.request<AgentTask>('POST', `/agent/${encodeURIComponent(id)}/cancel`, {}); }
+  agentImage(id: string, mediaAssetId: string) { return this.request<{ dataUrl: string }>('POST', `/agent/${encodeURIComponent(id)}/image`, { mediaAssetId }); }
   readonly isElectron: boolean;
   // 이 인스턴스의 고정 모드. request()가 데모일 때 논리 경로 앞에 `/demo` 를 붙인다. 네이티브에서는
   // bootstrap()이 main 소유의 권한 모드로 1회 확정하며, 이후에는 절대 바뀌지 않는다(전환=전체 새로고침).

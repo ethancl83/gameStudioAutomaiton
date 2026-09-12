@@ -1,3 +1,4 @@
+import { useAgentScope } from '../components/AgentActions';
 // 스토어 배포: 공통 출시 파이프라인(검수→빌드→업로드)과 출시·트랙·심사 상태.
 // 출시를 시작하고 파이프라인을 드릴다운하며, 스토어 연결별 출시 리소스와 지원 작업을 관리한다.
 // 업로드 성공·심사 접수·실제 공개를 구분한다.
@@ -28,6 +29,7 @@ export function ReleasesView({
   goTo: (v: ViewKey) => void;
 }) {
   const [publishProjectId, setPublishProjectId] = useState<string>(state.projects[0]?.id ?? '');
+  useAgentScope(publishProjectId || undefined);
   const [publishOpen, setPublishOpen] = useState(false);
 
   const stores = eligibleStoreConnections(state);

@@ -1,8 +1,12 @@
 # 구현 검증 기록
 
-Last Updated: 2026-09-12 (실사용 결함 후속 수정 완료; 아래 v3 검증은 과거 체크포인트)
+Last Updated: 2026-09-13 (AI 요청·대화; 아래 기록은 과거 체크포인트)
 
-[계획 v5](../dev/active/app-operations-platform/app-operations-platform-plan-v5.md) · [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md) · [맥락](../dev/active/app-operations-platform/app-operations-platform-context.md) · [실제 지원 범위](integration-capabilities.md)
+[계획 v7](../dev/active/app-operations-platform/app-operations-platform-plan-v7.md) · [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md) · [맥락](../dev/active/app-operations-platform/app-operations-platform-context.md) · [실제 지원 범위](integration-capabilities.md)
+
+## 2026-09-13 AI 요청·대화 세션
+
+각 화면의 버튼과 채팅에서만 AI를 실행하고 Codex/OpenCode의 실제 세션 ID를 이어 쓰며 클리어 뒤 새 세션을 만들도록 연결했다. 관련 **25/25**, 타입·빌드·macOS Electron 검사를 통과했다. 전체 **451개 중 409 통과·36 실패·6 skip**이며 깨끗한 HEAD에서도 같은 36개가 실패했다. 실제 LLM·스토어 검증과 구별한다. [상세 증거와 제한](verification-assets/ai-requests-20260913.md) · [사용법](ai-operations.md).
 
 ## 2026-09-12 실사용 결함 수정
 

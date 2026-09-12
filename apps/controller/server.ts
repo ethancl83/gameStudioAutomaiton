@@ -167,6 +167,17 @@ export async function startController(options: ControllerOptions = {}): Promise<
         } finally { resettingDemo = false; }
       }
       else if (method === 'GET' && path === '/api/state') data = await activeService.state();
+      else if (method === 'GET' && path === '/api/agent') data = await activeService.agent.state();
+      else if (method === 'PUT' && path === '/api/agent/settings') data = activeService.agent.saveSettings(body);
+      else if (method === 'POST' && path === '/api/agent/requests') data = activeService.agent.request(body);
+      else if (/^\/api\/agent\/[a-zA-Z0-9-]{1,100}\/(resume|cancel|clear|image)$/.test(path)) {
+        const id = path.split('/')[3]!;
+        if (method === 'POST' && path.endsWith('/resume')) data = activeService.agent.resume(id, body);
+        else if (method === 'POST' && path.endsWith('/cancel')) data = activeService.agent.cancel(id);
+        else if (method === 'POST' && path.endsWith('/clear')) data = await activeService.agent.clear(id);
+        else if (method === 'POST' && path.endsWith('/image')) data = await activeService.agent.imagePreview(id, text(object(body).mediaAssetId, '이미지 ID', 100));
+        else throw new AppError('NOT_FOUND', '지원하지 않는 AI 요청입니다.', 404);
+      }
       else if (method === 'GET' && path === '/api/setup') data = await activeService.preparation.state();
       else if (/^\/api\/projects\/[a-zA-Z0-9-]{1,100}\/integration(?:\/(preview|apply|rollback))?$/.test(path)) {
         const id=path.split('/')[3]!; const action=path.split('/')[5];
@@ -278,6 +289,7 @@ export async function startController(options: ControllerOptions = {}): Promise<
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); }); });
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('Controller address unavailable');
     port = address.port;
+    service.agent.setOrigin(`http://127.0.0.1:${port}`);
     const temporary = infoPath + '.' + randomBytes(8).toString('hex') + '.tmp';
     await writeFile(temporary, JSON.stringify({ port, token, pid: process.pid, startedAt: service.startedAt }), { mode: 0o600, flag: 'wx' });
     await rename(temporary, infoPath);

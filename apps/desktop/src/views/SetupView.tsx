@@ -1,3 +1,4 @@
+import { useAgentScope } from '../components/AgentActions';
 // 운영 준비 화면: 엔진·SDK 설치/연결, 프로젝트별 준비 점검, 스토어 앱 매핑, 광고/결제 연동,
 // 앱·제어 서비스 수명주기를 한 화면에서 다룬다. 데모/실제 모두 같은 논리 API를 쓴다(모드는 불변 클라이언트).
 // 점검 항목의 조치 링크는 기존 화면(프로젝트·계정·키·러너)으로 이동한다.
@@ -353,6 +354,7 @@ function ProjectPreparationSection({
   const projects = state.projects;
   const [projectId, setProjectId] = useState(projects[0]?.id ?? '');
   const project = projects.find((p) => p.id === projectId) ?? projects[0];
+  useAgentScope(project?.id);
   const targets = (project?.targets.length ? project.targets : (['android'] as BuildTarget[]));
   const [target, setTarget] = useState<BuildTarget>(targets[0]);
 

@@ -1,3 +1,4 @@
+import { useAgentScope } from '../components/AgentActions';
 // 커뮤니티(SNS): X · Threads · Steam 채널의 게시물·멘션·답글·뉴스 조회와 작성, 예약 게시,
 // 프로젝트별 소셜 자동화 정책. 지원되는 작업만 노출한다(Steam 뉴스는 읽기 전용).
 import { useMemo, useState } from 'react';
@@ -53,6 +54,7 @@ export function CommunityView({
   goTo: (v: ViewKey) => void;
 }) {
   const [projectId, setProjectId] = useState<string>(state.projects[0]?.id ?? '');
+  useAgentScope(projectId || undefined);
   const project = projectId ? state.projects.find((p) => p.id === projectId) ?? null : null;
 
   // 채널: capability가 커뮤니티 작업을 지원하는 연결(X/Threads + list-news 지원 Steam).

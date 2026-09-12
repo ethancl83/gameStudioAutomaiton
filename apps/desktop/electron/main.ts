@@ -418,7 +418,7 @@ function isTrustedFrame(frame: WebFrameMain | null): boolean {
 // 그 창의 최상위 프레임에서 온 호출만 특권 작업을 수행한다(다른 webContents·서브프레임·외부 URL 차단).
 function isTrustedSender(e: { senderFrame: WebFrameMain | null; sender?: { id: number } }): boolean {
   if (mainWindowId === null || e.sender?.id !== mainWindowId) return false;
-  return isTrustedSender(e);
+  return isTrustedFrame(e.senderFrame);
 }
 
 // 데모 모드는 실제 제어 서비스·OS 자동 시작을 절대 바꾸지 않는다는 불변식을 main 경계에서 강제한다.

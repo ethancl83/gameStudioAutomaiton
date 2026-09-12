@@ -1,3 +1,4 @@
+import { AgentRequestButton } from '../components/AgentActions';
 // 계정 연결: 최초 1회 연결(Google OAuth 또는 수동/서비스 계정), 상태 검사, 재연결, 자격 증명 수정, 해제.
 // - 비밀 값은 화면 상태에만 두고 제어 서비스로 전송하며, 화면/로그에 다시 노출하지 않는다.
 // - bearer·보관함 비밀은 노출하지 않는다.
@@ -165,6 +166,7 @@ function ConnectionCard({ conn, state, refresh }: { conn: Connection; state: App
           <div className="small muted">{providerLabel(conn.provider)}</div>
         </div>
         <div style={{ marginLeft: 'auto' }}>
+          <AgentRequestButton context={{ screen: 'connections', connectionId: conn.id }} />
           <ConnectionStatusBadge status={conn.status} />
         </div>
       </div>

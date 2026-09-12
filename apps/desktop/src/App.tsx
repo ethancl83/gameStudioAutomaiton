@@ -1,7 +1,8 @@
 // 앱 셸: 남색 사이드바 + 상단바 + 콘텐츠. 간단한 상태 기반 라우팅.
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Activity,
+  Bot,
   AlertOctagon,
   BadgeDollarSign,
   ClipboardCheck,
@@ -22,7 +23,7 @@ import {
 } from 'lucide-react';
 import { useAppState } from './appState';
 import { formatRelative } from './format';
-import { Spinner } from './components/ui';
+import { Modal, Notice, Spinner } from './components/ui';
 import { DashboardView } from './views/DashboardView';
 import { ProjectsView } from './views/ProjectsView';
 import { ConnectionsView } from './views/ConnectionsView';
@@ -36,9 +37,15 @@ import { OperationNotifications } from './components/OperationNotifications';
 import { HistoryView } from './views/HistoryView';
 import { SettingsView } from './views/SettingsView';
 import { ModeControl } from './components/ModeControl';
+import { AgentPanel } from './components/AgentPanel';
+import { AgentActions } from './components/AgentActions';
+import { SCREEN_REQUESTS } from '../../../packages/agent/requests';
+import type { AgentRequestContext } from '../../../packages/agent/types';
+import { api } from './api';
 import type { AppState } from '../../../packages/domain';
 
 export type ViewKey =
+  | 'agent'
   | 'dashboard'
   | 'setup'
   | 'projects'
@@ -61,6 +68,7 @@ interface NavDef {
 }
 
 const NAV: NavDef[] = [
+  { key: 'agent', label: 'AI 운영', icon: Bot, desc: '채팅이나 AI 요청 버튼으로 작업하고, 클리어 전까지 같은 대화를 이어갑니다' },
   {
     key: 'dashboard',
     label: '대시보드',
@@ -145,8 +153,25 @@ export function App() {
   // (전환=전체 새로고침). mode는 그 확정된 클라이언트 모드(api.getMode())를 반영한다. 전환/확인은
   // ModeControl이 담당하고, 그동안의 오버레이는 로컬 switching으로 표시한다.
   const { state, phase, refresh, refreshing, lastUpdatedAt, error, mode } = useAppState();
-  const [view, setView] = useState<ViewKey>('dashboard');
+  const [view, setView] = useState<ViewKey>('agent');
   const [switching, setSwitching] = useState(false);
+  const [scope, setScope] = useState<Pick<AgentRequestContext, 'projectId' | 'connectionId'>>({});
+  const [agentOpen, setAgentOpen] = useState(false);
+  const closeAgent = useCallback(() => setAgentOpen(false), []);
+  const [chatProjectId, setChatProjectId] = useState<string | null>(null);
+  const [agentPending, setAgentPending] = useState(false);
+  const [agentError, setAgentError] = useState('');
+  const requestAgent = useCallback(async (context: AgentRequestContext) => {
+    setAgentPending(true); setAgentError('');
+    try {
+      const result = await api.requestAgent(context);
+      if (!result.ok) { setAgentError(result.error.message); return; }
+      setChatProjectId(result.data.projectId); setAgentOpen(true);
+    } finally { setAgentPending(false); }
+  }, []);
+  const navigate = (next: ViewKey) => { setScope({}); setView(next); };
+  const requestContext: AgentRequestContext = { screen: view, ...scope };
+
 
   const actionRequiredCount = useMemo(() => {
     if (!state) return 0;
@@ -160,6 +185,7 @@ export function App() {
   const current = NAV_BY_KEY[view];
 
   return (
+    <AgentActions.Provider value={{ setScope, request: context => void requestAgent(context), pending: agentPending }}>
     <div className="app-shell">
       <OperationNotifications state={state} />
       {switching && (
@@ -188,7 +214,7 @@ export function App() {
                 key={item.key}
                 className="nav-item"
                 aria-current={view === item.key ? 'page' : undefined}
-                onClick={() => setView(item.key)}
+                onClick={() => navigate(item.key)}
               >
                 <Icon size={16} aria-hidden />
                 <span>{item.label}</span>
@@ -224,6 +250,8 @@ export function App() {
           </div>
           <div className="topbar__spacer" />
           <div className="topbar__meta">
+            <button className="btn btn--primary btn--sm" disabled={!state || agentPending} title={SCREEN_REQUESTS[view].label} onClick={() => void requestAgent(requestContext)}>{agentPending ? <Spinner /> : <Bot size={15} />}AI 요청</button>
+            <button className="btn btn--sm" disabled={!state} onClick={() => { setChatProjectId(scope.projectId ?? null); setAgentOpen(true); }}>AI 대화</button>
             <ModeControl mode={mode} serverMode={state?.runtime.mode} setSwitching={setSwitching} />
             {actionRequiredCount > 0 && (
               <span className="badge badge--error" title="사용자 조치가 필요한 항목">
@@ -244,17 +272,22 @@ export function App() {
         </header>
 
         <main className="content">
+          {agentError && <Notice tone="error">{agentError}</Notice>}
           <ViewRouter
             view={view}
             state={state}
             phase={phase}
             error={error?.message ?? null}
             refresh={refresh}
-            goTo={setView}
+            goTo={navigate}
           />
         </main>
       </div>
     </div>
+    {agentOpen && state && <Modal title="AI 대화" onClose={closeAgent} wide>
+      <AgentPanel key={chatProjectId ?? 'workspace'} state={state} projectId={chatProjectId} />
+    </Modal>}
+    </AgentActions.Provider>
   );
 }
 
@@ -322,6 +355,8 @@ function ViewRouter({
   }
 
   switch (view) {
+    case 'agent':
+      return <AgentPanel state={state} onRegister={() => goTo('projects')} />;
     case 'dashboard':
       return <DashboardView state={state} refresh={refresh} goTo={goTo} />;
     case 'setup':

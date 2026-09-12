@@ -1,3 +1,4 @@
+import { useAgentScope } from '../components/AgentActions';
 // 이력: 작업(Run)과 타임라인 이벤트의 전체 조회. 원인·결과를 한 곳에서 추적한다.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, History, ListFilter } from 'lucide-react';
@@ -14,6 +15,7 @@ export function HistoryView({ state, refresh }: { state: AppState; refresh: () =
   const [tab, setTab] = useState<Tab>('runs');
   const [statusFilter, setStatusFilter] = useState<RunStatus | ''>('');
   const [projectFilter, setProjectFilter] = useState<string>('');
+  useAgentScope(projectFilter || undefined);
   const [history, setHistory] = useState<HistoryPage>({ runs: [], events: [], nextCursor: null });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

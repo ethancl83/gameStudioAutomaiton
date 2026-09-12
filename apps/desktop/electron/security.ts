@@ -25,6 +25,13 @@ interface RouteRule {
 const ROUTES: RouteRule[] = [
   { method: 'GET', pattern: '/health' },
   { method: 'GET', pattern: '/state' },
+  { method: 'GET', pattern: '/agent' },
+  { method: 'PUT', pattern: '/agent/settings' },
+  { method: 'POST', pattern: '/agent/requests' },
+  { method: 'POST', pattern: '/agent/:id/resume' },
+  { method: 'POST', pattern: '/agent/:id/cancel' },
+  { method: 'POST', pattern: '/agent/:id/clear' },
+  { method: 'POST', pattern: '/agent/:id/image' },
   { method: 'POST', pattern: '/media' },
   { method: 'POST', pattern: '/projects/:id/artifacts' },
   { method: 'POST', pattern: '/history/query' },
@@ -143,6 +150,8 @@ export function isAllowedApiPath(method: string, path: string): boolean {
 // openExternal 허용 호스트. 공급자 콘솔/공식 문서의 설정 링크만 시스템 브라우저로 연다.
 // capability.setupUrl 도메인을 기준으로 하되, 하위 도메인까지 정확 일치/접미사 일치로 검사한다.
 const ALLOWED_EXTERNAL_HOSTS: readonly string[] = [
+  'opencode.ai',
+  'chatgpt.com',
   // Google OAuth 동의 화면(시스템 브라우저에서 최초 1회 로그인).
   'accounts.google.com',
   'play.google.com',

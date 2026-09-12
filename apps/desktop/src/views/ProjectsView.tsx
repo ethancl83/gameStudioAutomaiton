@@ -1,3 +1,4 @@
+import { useAgentScope } from '../components/AgentActions';
 // 프로젝트: 폴더 등록 → 검수 → 빌드 실행/로그/취소, 실행 정책 저장.
 import { useMemo, useState } from 'react';
 import {
@@ -39,6 +40,7 @@ export function ProjectsView({
   goTo: (v: ViewKey) => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  useAgentScope(selectedId ?? undefined);
   const [registerOpen, setRegisterOpen] = useState(false);
 
   const selected = selectedId ? state.projects.find((p) => p.id === selectedId) ?? null : null;
@@ -60,7 +62,7 @@ export function ProjectsView({
     <div className="stack">
       <div className="row row--between">
         <p className="muted small" style={{ margin: 0 }}>
-          폴더를 등록하면 엔진·버전·타깃·앱 식별자를 탐지하고, 검수와 빌드를 실행할 수 있습니다.
+          프로젝트를 선택하고 AI 요청을 누르면 분석부터 스토어 문구·이미지·등록까지 진행합니다.
         </p>
         <button className="btn btn--primary" onClick={() => setRegisterOpen(true)}>
           <FolderPlus size={15} /> 프로젝트 등록

@@ -1,10 +1,10 @@
 # 앱 출시·마케팅·수익화 통합 자동화 작업 목록
 
-Last Updated: 2026-09-12
+Last Updated: 2026-09-13
 
 프로젝트명: `gameStudioAutomaiton`. 2026-09-12 사용자 지시로 앱 표시명·패키지 이름을 통일하고 `sphacker83/gameStudioAutomaiton` 비공개 저장소로 관리한다. 이름 변경 타입 검사·컴파일·패키징 메타데이터 검증 통과. 기존 개발계획 파일명은 참조 이력으로 보존한다.
 
-유효 기준선: [개발계획 v5](app-operations-platform-plan-v5.md), [v4](app-operations-platform-plan-v4.md), [v3](app-operations-platform-plan-v3.md), [v2](app-operations-platform-plan-v2.md), [승계한 v1](app-operations-platform-plan.md). 진행 맥락: [작업 맥락](app-operations-platform-context.md). 14개 Phase, 56개 작업이며 완료 조건을 충족한 작업은 문서 3개와 v3 통합 5개, 실사용 후속 수정 6개, 총 14개다. 나머지 42개는 실서비스·OS·장기 수용 조건까지 포함하며 코드 구현률을 뜻하지 않는다.
+유효 기준선: [개발계획 v7](app-operations-platform-plan-v7.md), [v6](app-operations-platform-plan-v6.md), [v5](app-operations-platform-plan-v5.md), [v4](app-operations-platform-plan-v4.md), [v3](app-operations-platform-plan-v3.md), [v2](app-operations-platform-plan-v2.md), [승계한 v1](app-operations-platform-plan.md). 진행 맥락: [작업 맥락](app-operations-platform-context.md). 15개 Phase, 61개 작업이며 문서 3개·v3 통합 5개·실사용 후속 수정 6개·AI 요청 5개, 총 19개를 완료했다. 나머지 42개는 실서비스·OS·장기 수용 조건까지 포함하며 코드 구현률을 뜻하지 않는다.
 
 Phase 1의 문서 고정 뒤 사용자 지시로 구현을 진행 중이다. 체크 표시는 해당 작업의 전체 산출물·검증 계약이 완료됐다는 뜻이며 코드 생성만으로 체크하지 않는다. 구현 중 경로는 [구현 계약](../../../docs/implementation-contract.md)과 context의 체크포인트를 따른다. 각 작업의 완료 조건은 해당 Phase의 Acceptance Criteria와 V-* 검증 계약을 함께 적용한다. 최근 검증은 [검증 기록](../../../docs/verification.md), [이력·복구 계약](../../../docs/workflow-contract.md), [운영 정책](../../../docs/automation-policies.md), [지표 정의](../../../docs/metric-definitions.md)에 기록한다.
 
@@ -359,3 +359,13 @@ Phase 1의 문서 고정 뒤 사용자 지시로 구현을 진행 중이다. 체
 - [x] T-14.6 Apple 이미지/검증 정합성·회귀 검사·화면 확인·문서 반영
 
 Acceptance: [v5](app-operations-platform-plan-v5.md)의 이번 완료 조건을 충족했다. 외부 공급자 쓰기 없는 모의/임시 데이터 검증을 실계정 검증과 구별한다. 문서 반영: [사용법](../../../docs/external-artifacts.md), [복구 계약](../../../docs/workflow-contract.md), [정책](../../../docs/automation-policies.md). 검증 참조: [434/434 및 27/27·타입·컴파일·실제/데모 화면 증거](../../../docs/verification-assets/operational-fixes-20260912.md).
+
+## Phase 15 — 요청 기반 AI와 대화 세션 [상태: 완료]
+
+- [x] T-15.1 Codex/OpenCode CLI 어댑터·native JSON 이벤트·명시적 resume·종료/취소
+- [x] T-15.2 요청만 실행하는 영속 세션·제공자 고정·재시작·clear 경합 처리
+- [x] T-15.3 프로젝트 분석·스토어 문구·실제 PNG·계정 재사용·큐 도구와 완료 근거
+- [x] T-15.4 각 화면의 AI 요청/대화·선택 전달·전송·중지·클리어·결과물 UI
+- [x] T-15.5 요청/세션 회귀 검사·타입·빌드·실제 Electron 검증·사용법·기획 연결
+
+검증: AI/Electron 관련 25/25, 타입·빌드 통과. 전체 451개 중 409 통과·36 실패·6 skip이며 깨끗한 HEAD의 36개 실패와 동일하다. 실서비스 검증으로 표시하지 않는다. 실제 Electron은 별도 DB·CLI 대역으로 버튼/대화/resume/clear/이미지를 확인했다. [상세 결과](../../../docs/verification-assets/ai-requests-20260913.md) · [사용법](../../../docs/ai-operations.md). 2차 기능은 [별도 기획](../ai-growth-operations/ai-growth-operations-plan-v2.md)으로만 전달했다. 기존 실계정·OS·장기 수용 42개는 유지한다.
