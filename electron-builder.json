@@ -1,0 +1,12 @@
+{
+  "appId": "local.appops.desktop",
+  "productName": "App Operations",
+  "asar": false,
+  "directories": { "output": "release" },
+  "files": ["dist/**/*", "package.json", "!dist/**/*.map"],
+  "linux": { "target": ["deb", "AppImage"], "category": "Development", "executableName": "app-operations" },
+  "deb": { "maintainer": "App Operations" },
+  "mac": { "target": ["dmg"], "category": "public.app-category.developer-tools" },
+  "win": { "target": ["nsis"] },
+  "publish": null
+}

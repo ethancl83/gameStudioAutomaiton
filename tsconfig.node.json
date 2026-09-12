@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "rootDir": ".",
+    "noEmit": false,
+    "types": ["node"],
+    "sourceMap": true
+  },
+  "include": ["apps/controller", "apps/runner", "apps/desktop/electron", "packages"],
+  "exclude": ["node_modules", "dist", "tests"]
+}

@@ -1,0 +1,33 @@
+{
+  "directory": "/tmp/appops-godot-controller-MQpBLH",
+  "projectId": "09f66649-be42-400d-b3a7-ab8273fb86f6",
+  "runId": "365f75c7-71c0-4a29-9550-0de33c8cd1bc",
+  "status": "succeeded",
+  "result": {
+    "snapshotHash": "73d4c93fe143ad6b9bf64510632f5168e37ebce8a764ac4e355989169e0f4054",
+    "sourceSnapshotHash": "73d4c93fe143ad6b9bf64510632f5168e37ebce8a764ac4e355989169e0f4054",
+    "snapshotFileCount": 4,
+    "dependencies": [],
+    "artifacts": [
+      {
+        "path": "/tmp/appops-godot-controller-MQpBLH/data/artifacts/365f75c7-71c0-4a29-9550-0de33c8cd1bc/Controller Verify",
+        "name": "Controller Verify",
+        "size": 66074584,
+        "sha256": "815e684e29581339daefab779b8c2b36d081fba58e4db8a2b66cdaeefcb80bbc",
+        "kind": "file"
+      },
+      {
+        "path": "/tmp/appops-godot-controller-MQpBLH/data/artifacts/365f75c7-71c0-4a29-9550-0de33c8cd1bc/Controller Verify.pck",
+        "name": "Controller Verify.pck",
+        "size": 1840,
+        "sha256": "7a42bb47bf7c28efcd7ba66b9d0e7962519f08ea334e8ede36fda4cf0f8d4402",
+        "kind": "file"
+      }
+    ],
+    "signatures": [],
+    "target": "linux",
+    "startedAt": "2026-09-11T08:51:30.835Z",
+    "finishedAt": "2026-09-11T08:51:47.669Z"
+  },
+  "error": null
+}

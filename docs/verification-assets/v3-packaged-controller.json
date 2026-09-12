@@ -1,0 +1,23 @@
+{
+  "verifiedAt": "2026-09-11T11:35:01.493Z",
+  "electron": "44.3.0",
+  "node": "24.20.0",
+  "appRoot": "/home/ethancl/Workspace/automation/release/linux-unpacked/resources/app",
+  "unauthenticatedStatus": 401,
+  "live": {
+    "mode": "live",
+    "connections": 0,
+    "projects": 0,
+    "vaultAvailable": true
+  },
+  "demo": {
+    "mode": "demo",
+    "connections": 9,
+    "projects": 5,
+    "pipelineStatus": "succeeded",
+    "buildRunId": "39ff6b9b-b389-4c54-a861-e7e620e39e88",
+    "uploadRunId": "ed20cf2a-b9b9-4208-8df3-496a99e60bc6",
+    "backupCreated": true
+  },
+  "liveExternalWrites": 0
+}

@@ -1,0 +1,18 @@
+{
+  "controller": "packaged Electron Node process",
+  "status": "passed",
+  "providers": [
+    "google-play",
+    "app-store",
+    "steam",
+    "google-ads",
+    "applovin-ads",
+    "applovin-max",
+    "admob",
+    "x",
+    "threads"
+  ],
+  "buildCredentials": 0,
+  "socialSchedules": 0,
+  "platform": "linux"
+}

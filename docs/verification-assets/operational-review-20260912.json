@@ -1,0 +1,38 @@
+{
+  "rejectedWrite": {
+    "status": "action_required",
+    "failureCode": "PROVIDER_REJECTED",
+    "effect": "action_required",
+    "cancel": "RECONCILIATION_REQUIRED",
+    "retry": "RECONCILIATION_REQUIRED",
+    "reconcileStatus": "action_required",
+    "reconcileFailure": "RECONCILIATION_REQUIRED",
+    "nextPost": "SOCIAL_DAILY_LIMIT"
+  },
+  "multiAppSync": {
+    "automaticProjectId": null,
+    "automaticPackages": [
+      "com.review.a"
+    ],
+    "explicitProjectPackages": [
+      "com.review.b"
+    ],
+    "productListHasProjectSelector": false,
+    "releaseListHasProjectSelector": false
+  },
+  "deletedCampaign": {
+    "freshProviderCount": 0,
+    "cachedCount": 1,
+    "cachedStatus": "PAUSED",
+    "newCampaign": "BUDGET_LIMIT"
+  },
+  "releaseAnnouncements": {
+    "afterPublicReleaseOperations": 0,
+    "afterUploadRun": 1
+  },
+  "validScreenshot": {
+    "mime": "image/png",
+    "width": 1290,
+    "height": 2796
+  }
+}

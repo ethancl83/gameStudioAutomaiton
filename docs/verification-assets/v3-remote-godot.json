@@ -1,0 +1,36 @@
+{
+  "directory": "/tmp/appops-godot-controller-yqj9tU",
+  "mode": "live",
+  "transport": "authenticated loopback HTTP remote runner",
+  "runId": "e99efef9-1eeb-4043-ace6-bb5dd58a2550",
+  "status": "succeeded",
+  "result": {
+    "snapshotHash": "73d4c93fe143ad6b9bf64510632f5168e37ebce8a764ac4e355989169e0f4054",
+    "sourceSnapshotHash": "73d4c93fe143ad6b9bf64510632f5168e37ebce8a764ac4e355989169e0f4054",
+    "snapshotFileCount": 4,
+    "dependencies": [],
+    "runnerId": "0a949c9b-0e65-44ee-946f-89a316965382",
+    "runnerLabel": "검증용 원격 Linux",
+    "artifacts": [
+      {
+        "path": "/tmp/appops-godot-controller-yqj9tU/data/artifacts/e99efef9-1eeb-4043-ace6-bb5dd58a2550/Controller Verify",
+        "name": "Controller Verify",
+        "size": 66074584,
+        "sha256": "815e684e29581339daefab779b8c2b36d081fba58e4db8a2b66cdaeefcb80bbc",
+        "kind": "file"
+      },
+      {
+        "path": "/tmp/appops-godot-controller-yqj9tU/data/artifacts/e99efef9-1eeb-4043-ace6-bb5dd58a2550/Controller Verify.pck",
+        "name": "Controller Verify.pck",
+        "size": 1840,
+        "sha256": "67e55926b170cd1bf223c103a3df0a692cc7c44c65c78f9ca13a8ddd97eea7e4",
+        "kind": "file"
+      }
+    ],
+    "signatures": [],
+    "target": "linux",
+    "startedAt": "2026-09-11T10:17:27.101Z",
+    "finishedAt": "2026-09-11T10:17:43.196Z"
+  },
+  "error": null
+}

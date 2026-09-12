@@ -1,0 +1,48 @@
+{
+  "name": "app-operations-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first app publishing, marketing and monetization operations",
+  "main": "dist/apps/desktop/electron/main.js",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite --host 127.0.0.1",
+    "preview": "node scripts/preview.mjs",
+    "controller": "tsx apps/controller/main.ts",
+    "start": "node dist/apps/controller/main.js",
+    "desktop": "node scripts/desktop.mjs",
+    "build": "tsc -p tsconfig.node.json && node scripts/build-preload.mjs && vite build",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "test": "node scripts/test.mjs",
+    "pack": "npm run build && electron-builder --dir --config electron-builder.json",
+    "dist": "npm run build && electron-builder --config electron-builder.json",
+    "verify:godot": "tsx scripts/verify-godot.ts",
+    "runner": "tsx apps/runner/remote-main.ts"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "2.0.0",
+    "fflate": "0.8.3",
+    "lucide-react": "1.44.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "sharp": "0.35.4"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/ssh2": "1.15.6",
+    "@vitejs/plugin-react": "6.1.1",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "ssh2": "1.17.0",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}
