@@ -2,6 +2,8 @@
 
 Last Updated: 2026-09-12
 
+프로젝트명: `gameStudioAutomaiton`. 2026-09-12 사용자 지시로 앱 표시명·패키지 이름을 통일하고 `sphacker83/gameStudioAutomaiton` 비공개 저장소로 관리한다. 이름 변경 타입 검사·컴파일·패키징 메타데이터 검증 통과. 기존 개발계획 파일명은 참조 이력으로 보존한다.
+
 유효 기준선: [개발계획 v5](app-operations-platform-plan-v5.md), [v4](app-operations-platform-plan-v4.md), [v3](app-operations-platform-plan-v3.md), [v2](app-operations-platform-plan-v2.md), [승계한 v1](app-operations-platform-plan.md). 진행 맥락: [작업 맥락](app-operations-platform-context.md). 14개 Phase, 56개 작업이며 완료 조건을 충족한 작업은 문서 3개와 v3 통합 5개, 실사용 후속 수정 6개, 총 14개다. 나머지 42개는 실서비스·OS·장기 수용 조건까지 포함하며 코드 구현률을 뜻하지 않는다.
 
 Phase 1의 문서 고정 뒤 사용자 지시로 구현을 진행 중이다. 체크 표시는 해당 작업의 전체 산출물·검증 계약이 완료됐다는 뜻이며 코드 생성만으로 체크하지 않는다. 구현 중 경로는 [구현 계약](../../../docs/implementation-contract.md)과 context의 체크포인트를 따른다. 각 작업의 완료 조건은 해당 Phase의 Acceptance Criteria와 V-* 검증 계약을 함께 적용한다. 최근 검증은 [검증 기록](../../../docs/verification.md), [이력·복구 계약](../../../docs/workflow-contract.md), [운영 정책](../../../docs/automation-policies.md), [지표 정의](../../../docs/metric-definitions.md)에 기록한다.

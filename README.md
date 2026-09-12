@@ -1,14 +1,14 @@
-# App Operations
+# gameStudioAutomaiton
 
-프로젝트 폴더에서 검수·빌드·서명·배포를 시작하고 스토어·광고·수익·SNS/커뮤니티와 작업 이력을 관리하는 로컬 데스크톱 앱이다. 서비스 계정과 빌드 키는 최초 등록 후 재사용하고 지원하는 인증 갱신은 자동 처리한다.
+외부에서 만든 게임·앱 결과물을 가져와 배포하고 스토어·광고·수익·SNS/커뮤니티와 작업 이력을 관리하는 로컬 데스크톱 앱이다. 기본 출시 흐름은 [외부 결과물 가져오기 → 확인 → 업로드](docs/external-artifacts.md)이며 내부 빌드를 요구하지 않는다. 서비스 계정과 빌드 키는 최초 등록 후 재사용하고 지원하는 인증 갱신은 자동 처리한다.
 
 기본 데모에서 9개 서비스와 5개 엔진의 프로젝트를 바로 관리할 수 있다. 데모에서 빌드·배포·광고·상품·게시·키·복구를 실행한 뒤 실제 모드로 전환해 계정을 연결한다. 두 모드의 데이터와 외부 실행은 분리된다. Electron·React 화면, SQLite 작업 큐, 암호화 보관함, Linux 로컬/원격 격리 빌드와 공급자 API 어댑터를 사용한다. 현재는 개발 버전이며 실계정·다른 OS·전체 수용 검사를 완료한 출시 버전은 아니다. 수행한 검증은 [검증 기록](docs/verification.md)에 구분한다.
 
-검증한 개발 패키지: [Linux AppImage](<release/App Operations-0.1.0.AppImage>). 전체 검사 246개·타입·패키지 제어 서비스의 데모 출시·백업 검사를 통과했다. 실계정 게시/배포 검증과 네이티브 창 실행 제약은 아래와 검증 문서를 참고한다.
+이전 이름으로 검증한 개발 패키지: [Linux AppImage](<release/App Operations-0.1.0.AppImage>). 이전 패키지와 별도로 현재 코드는 전체 검사 434개·최종 관련 검사 27개·타입·운영 앱 컴파일 검사를 통과했다. 실계정 게시/배포 검증과 네이티브 창 실행 제약은 아래와 검증 문서를 참고한다.
 
 ## 실행
 
-Node.js 22.13 이상과 npm이 필요하다. 검증 환경은 Node 22.22.1/Linux x64다.
+Node.js 22.16 이상과 npm이 필요하다. 검증 환경은 Node 22.22.1/Linux x64다.
 
 ```bash
 npm ci
@@ -41,7 +41,7 @@ pack은 현재 OS 실행 폴더, dist는 설치/배포 파일을 release/에 생
 
 ## 개발 문서
 
-2026-09-11 고정한 **[계획 v3](dev/active/app-operations-platform/app-operations-platform-plan-v3.md) → [작업 목록](dev/active/app-operations-platform/app-operations-platform-tasks.md) → [작업 맥락](dev/active/app-operations-platform/app-operations-platform-context.md)** 순서로 읽는다. [v1](dev/active/app-operations-platform/app-operations-platform-plan.md)·[v2](dev/active/app-operations-platform/app-operations-platform-plan-v2.md)를 승계하며 데모·실제 운영 통합을 추가했다. 원본 계획을 보존하고 진행 정보는 tasks/context에 기록한다.
+현재 유효한 **[계획 v5](dev/active/app-operations-platform/app-operations-platform-plan-v5.md) → [작업 목록](dev/active/app-operations-platform/app-operations-platform-tasks.md) → [작업 맥락](dev/active/app-operations-platform/app-operations-platform-context.md)** 순서로 읽는다. [v1](dev/active/app-operations-platform/app-operations-platform-plan.md)·[v2](dev/active/app-operations-platform/app-operations-platform-plan-v2.md)와 v3·v4를 승계하며 실사용 후속 수정과 외부 결과물 배포를 반영했다. 원본 계획을 보존하고 진행 정보는 tasks/context에 기록한다.
 
 | 문서 | 내용 |
 |---|---|

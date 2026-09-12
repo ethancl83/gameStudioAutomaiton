@@ -84,7 +84,7 @@ export class PortableBackups {
     const hash=createHash('sha256');let size=0,prefix=Buffer.alloc(0),complete=false;
     try{
       for await(const data of stream){const bytes=Buffer.from(data);size+=bytes.length;if(this.stopped||signal.aborted||size>LIMIT)throw new AppError('BACKUP_LIMIT','백업 가져오기가 중단되었거나 크기 한도를 넘습니다.');
-        if(prefix.length<8){prefix=Buffer.concat([prefix,bytes.subarray(0,8-prefix.length)]);if(prefix.length===8&&!prefix.equals(Buffer.from('APPOPSB1')))throw new AppError('BACKUP_INVALID','App Operations 전체 백업 파일을 선택해 주세요.');}
+        if(prefix.length<8){prefix=Buffer.concat([prefix,bytes.subarray(0,8-prefix.length)]);if(prefix.length===8&&!prefix.equals(Buffer.from('APPOPSB1')))throw new AppError('BACKUP_INVALID','gameStudioAutomaiton 전체 백업 파일을 선택해 주세요.');}
         hash.update(bytes);let offset=0;while(offset<bytes.length){const r=await file.write(bytes,offset,bytes.length-offset);if(!r.bytesWritten)throw new Error('write failed');offset+=r.bytesWritten;}
       }
       if(size<12||length!==undefined&&size!==length)throw new AppError('BACKUP_INVALID','가져온 백업 파일이 중간에 잘렸습니다.');

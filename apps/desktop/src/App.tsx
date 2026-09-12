@@ -174,7 +174,7 @@ export function App() {
             <Rocket size={17} />
           </div>
           <div className="sidebar__brand-text">
-            <span className="sidebar__brand-title">앱 운영 콘솔</span>
+            <span className="sidebar__brand-title">gameStudioAutomaiton</span>
             <span className="sidebar__brand-sub">출시 · 마케팅 · 수익화</span>
           </div>
         </div>

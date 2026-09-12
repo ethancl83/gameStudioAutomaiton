@@ -4,6 +4,7 @@ Last Updated: 2026-09-12
 
 ## Current Execution Contract
 
+- 프로젝트명·GitHub 저장소명: `gameStudioAutomaiton` (사용자가 지정한 철자 그대로). 소유자는 현재 인증된 `sphacker83`, 공개 범위는 private. 사용자 2026-09-12 지시로 이름 반영 후 커밋·최초 푸시를 진행한다. 앱 표시명·패키지 메타데이터를 통일하며 기존 데이터/키 보관함 식별자는 호환성을 위해 유지한다. 이름 변경 검증: 타입 검사·운영 앱 컴파일·패키징 메타데이터 읽기 통과.
 - 유효 plan: [v5](app-operations-platform-plan-v5.md). v1~v4는 이력으로 보존한다. 재개 순서: v5 → [tasks](app-operations-platform-tasks.md) → 이 context.
 - 이번 요청: 계정 연결 완료를 가정한 실사용 검토에서 보고한 항목을 수정한다. 게임 빌드는 외부에서 수행한다. Phase 14의 운영 오류·외부 결과물 경로·Apple 검사 후속 수정과 검증을 완료했다.
 - 기존 전체 작업: Phase 13 및 Phase 2–11의 실계정·OS·장기 수용 조건 42개는 남아 있다. 총 14/56(25%)은 체크리스트 완수율이며 제품 구현률이 아니다. 이번 후속 수정 완료와 전체 장기 개발 완료를 구별한다.

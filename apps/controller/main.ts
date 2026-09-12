@@ -13,7 +13,7 @@ try {
   const port = Number(process.env.APPOPS_PORT ?? 4317);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid port');
   const controller = await startController({ port });
-  process.stdout.write(`App Operations 제어 서비스: http://127.0.0.1:${controller.port}\n`);
+  process.stdout.write(`gameStudioAutomaiton 제어 서비스: http://127.0.0.1:${controller.port}\n`);
   let stopping = false;
   const stop = () => {
     if (stopping) return; stopping = true;

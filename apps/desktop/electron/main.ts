@@ -761,7 +761,7 @@ async function createWindow(): Promise<void> {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: '#16233b',
-    title: '앱 운영 콘솔',
+    title: 'gameStudioAutomaiton',
     show: false,
     webPreferences: {
       // 샌드박스 프리로드는 CommonJS여야 로드된다(ESM .js는 sandbox:true에서 로드되지 않아
