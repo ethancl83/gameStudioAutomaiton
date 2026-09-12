@@ -104,7 +104,7 @@ function readStoredMode(): RuntimeMode {
 export class ApiClient {
   agentState() { return this.request<AgentState>('GET', '/agent'); }
   saveAgentSettings(settings: AgentSettings) { return this.request<AgentSettings>('PUT', '/agent/settings', settings); }
-  requestAgent(context: AgentRequestContext & { message?: string }) { return this.request<AgentTask>('POST', '/agent/requests', context); }
+  requestAgent(context: AgentRequestContext & { message: string }) { return this.request<AgentTask>('POST', '/agent/requests', context); }
   clearAgent(id: string) { return this.request<AgentTask>('POST', `/agent/${encodeURIComponent(id)}/clear`, {}); }
   resumeAgent(id: string, answer = '') { return this.request<AgentTask>('POST', `/agent/${encodeURIComponent(id)}/resume`, { answer }); }
   cancelAgent(id: string) { return this.request<AgentTask>('POST', `/agent/${encodeURIComponent(id)}/cancel`, {}); }

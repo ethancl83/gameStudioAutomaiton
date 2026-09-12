@@ -62,7 +62,7 @@ export function ProjectsView({
     <div className="stack">
       <div className="row row--between">
         <p className="muted small" style={{ margin: 0 }}>
-          프로젝트를 선택하고 AI 요청을 누르면 분석부터 스토어 문구·이미지·등록까지 진행합니다.
+          프로젝트를 선택하고 AI 요청을 누르면 채팅이 열립니다. 요청을 작성해 전송하면 진행합니다.
         </p>
         <button className="btn btn--primary" onClick={() => setRegisterOpen(true)}>
           <FolderPlus size={15} /> 프로젝트 등록

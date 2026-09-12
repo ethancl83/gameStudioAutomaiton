@@ -23,7 +23,7 @@ import {
 } from 'lucide-react';
 import { useAppState } from './appState';
 import { formatRelative } from './format';
-import { Modal, Notice, Spinner } from './components/ui';
+import { Modal, Spinner } from './components/ui';
 import { DashboardView } from './views/DashboardView';
 import { ProjectsView } from './views/ProjectsView';
 import { ConnectionsView } from './views/ConnectionsView';
@@ -41,7 +41,6 @@ import { AgentPanel } from './components/AgentPanel';
 import { AgentActions } from './components/AgentActions';
 import { SCREEN_REQUESTS } from '../../../packages/agent/requests';
 import type { AgentRequestContext } from '../../../packages/agent/types';
-import { api } from './api';
 import type { AppState } from '../../../packages/domain';
 
 export type ViewKey =
@@ -68,7 +67,7 @@ interface NavDef {
 }
 
 const NAV: NavDef[] = [
-  { key: 'agent', label: 'AI 운영', icon: Bot, desc: '채팅이나 AI 요청 버튼으로 작업하고, 클리어 전까지 같은 대화를 이어갑니다' },
+  { key: 'agent', label: 'AI 운영', icon: Bot, desc: '요청을 확인하고 전송하면 진행합니다. 클리어 전까지 같은 대화를 이어갑니다' },
   {
     key: 'dashboard',
     label: '대시보드',
@@ -158,16 +157,10 @@ export function App() {
   const [scope, setScope] = useState<Pick<AgentRequestContext, 'projectId' | 'connectionId'>>({});
   const [agentOpen, setAgentOpen] = useState(false);
   const closeAgent = useCallback(() => setAgentOpen(false), []);
-  const [chatProjectId, setChatProjectId] = useState<string | null>(null);
-  const [agentPending, setAgentPending] = useState(false);
-  const [agentError, setAgentError] = useState('');
-  const requestAgent = useCallback(async (context: AgentRequestContext) => {
-    setAgentPending(true); setAgentError('');
-    try {
-      const result = await api.requestAgent(context);
-      if (!result.ok) { setAgentError(result.error.message); return; }
-      setChatProjectId(result.data.projectId); setAgentOpen(true);
-    } finally { setAgentPending(false); }
+  const [chatContext, setChatContext] = useState<AgentRequestContext>({ screen: 'agent' });
+  const requestAgent = useCallback((context: AgentRequestContext) => {
+    setChatContext(context);
+    setAgentOpen(true);
   }, []);
   const navigate = (next: ViewKey) => { setScope({}); setView(next); };
   const requestContext: AgentRequestContext = { screen: view, ...scope };
@@ -185,7 +178,7 @@ export function App() {
   const current = NAV_BY_KEY[view];
 
   return (
-    <AgentActions.Provider value={{ setScope, request: context => void requestAgent(context), pending: agentPending }}>
+    <AgentActions.Provider value={{ setScope, request: requestAgent }}>
     <div className="app-shell">
       <OperationNotifications state={state} />
       {switching && (
@@ -250,8 +243,8 @@ export function App() {
           </div>
           <div className="topbar__spacer" />
           <div className="topbar__meta">
-            <button className="btn btn--primary btn--sm" disabled={!state || agentPending} title={SCREEN_REQUESTS[view].label} onClick={() => void requestAgent(requestContext)}>{agentPending ? <Spinner /> : <Bot size={15} />}AI 요청</button>
-            <button className="btn btn--sm" disabled={!state} onClick={() => { setChatProjectId(scope.projectId ?? null); setAgentOpen(true); }}>AI 대화</button>
+            <button className="btn btn--primary btn--sm" disabled={!state} title={`${SCREEN_REQUESTS[view].label} 요청 작성`} onClick={() => requestAgent(requestContext)}><Bot size={15} />AI 요청</button>
+            <button className="btn btn--sm" disabled={!state} onClick={() => requestAgent(requestContext)}>AI 대화</button>
             <ModeControl mode={mode} serverMode={state?.runtime.mode} setSwitching={setSwitching} />
             {actionRequiredCount > 0 && (
               <span className="badge badge--error" title="사용자 조치가 필요한 항목">
@@ -272,7 +265,6 @@ export function App() {
         </header>
 
         <main className="content">
-          {agentError && <Notice tone="error">{agentError}</Notice>}
           <ViewRouter
             view={view}
             state={state}
@@ -285,7 +277,7 @@ export function App() {
       </div>
     </div>
     {agentOpen && state && <Modal title="AI 대화" onClose={closeAgent} wide>
-      <AgentPanel key={chatProjectId ?? 'workspace'} state={state} projectId={chatProjectId} />
+      <AgentPanel key={`${chatContext.screen}:${chatContext.projectId ?? ''}:${chatContext.connectionId ?? ''}`} state={state} projectId={chatContext.projectId ?? null} requestContext={chatContext} />
     </Modal>}
     </AgentActions.Provider>
   );

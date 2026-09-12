@@ -1,8 +1,17 @@
 # 구현 검증 기록
 
-Last Updated: 2026-09-13 (모드 전환 멈춤 수정; 아래 기록은 과거 체크포인트)
+Last Updated: 2026-09-13 (AI 요청 자동 전송 제거; 아래 기록은 과거 체크포인트)
 
-[계획 v7](../dev/active/app-operations-platform/app-operations-platform-plan-v7.md) · [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md) · [맥락](../dev/active/app-operations-platform/app-operations-platform-context.md) · [실제 지원 범위](integration-capabilities.md)
+[계획 v8](../dev/active/app-operations-platform/app-operations-platform-plan-v8.md) · [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md) · [맥락](../dev/active/app-operations-platform/app-operations-platform-context.md) · [실제 지원 범위](integration-capabilities.md)
+
+## 2026-09-13 AI 요청 자동 전송 제거
+
+버튼이 화면별 고정 문장을 사용자 요청으로 전송하고 즉시 CLI를 시작했다. 실제 HTTP 검사에서 내용이 없는 요청이 200으로 수락되는 것을 먼저 재현했다. 이제 버튼은 기존 채팅만 열고 서버는 메시지를 필수로 요구한다. 요청 UX는 사용자가 직접 재설계하며 새 작업 후보나 승인 단계는 추가하지 않았다.
+
+- `node --import tsx --test tests/project-agent.test.ts`: **19/19**. 모든 화면에서 메시지 누락/빈 문자열/공백을 400으로 거부하며 실행·세션 생성 0건, 실제 전송 문장·선택 범위·같은 세션 전달, resume/clear·CLI 실패·도구 경계를 확인했다.
+- 데스크톱 모드/보안 검사 **23/23**, 타입 검사·빌드 통과. 전체 검사는 재실행하지 않았다. 기존 Mac 실패 기준선은 아래 AI 최초 구현 검증 기록에 있다.
+- 별도 데이터·실제 HTTP·CLI 대역의 macOS Electron: 12개 화면에서 버튼 열기/닫기 실행 0건, 빈 입력창과 새 후보 UI 없음, 계정 카드의 선택 범위, 사용자 문장 전송 때 1건 실행, resume와 clear 후 새 세션을 확인했다. 1360×868 및 1100×728에서 입력/전송을 확인했다. [최종 화면](../tmp/ai-request-review-20260913/confirm-small.png).
+- 실제 LLM의 판단이나 외부 계정·스토어 변경은 수행하지 않았다. 기존 `ui.tsx`/`styles.css` 사용자 변경은 보존한다.
 
 ## 2026-09-13 Electron 모드 전환 멈춤
 

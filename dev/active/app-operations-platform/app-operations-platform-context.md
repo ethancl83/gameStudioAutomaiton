@@ -4,8 +4,9 @@ Last Updated: 2026-09-13
 
 ## Current Execution Contract
 
-- 유효 계획: [v7](app-operations-platform-plan-v7.md) → [tasks](app-operations-platform-tasks.md) → 이 context. v1–v6는 이력으로 보존한다.
-- 사용자 확정: 등록/화면 진입으로 AI를 시작하지 않는다. 채팅 또는 화면의 AI 요청 버튼으로만 시작한다. 버튼은 현재 화면과 선택한 프로젝트/계정을 전달한다. 클리어 전 native CLI ID로 resume, 클리어 뒤 다음 요청만 새 세션이다.
+- 유효 계획: [v8](app-operations-platform-plan-v8.md) → [tasks](app-operations-platform-tasks.md) → 이 context. v1–v7은 이력으로 보존한다.
+- 사용자 확정: 요청 흐름은 사용자가 직접 재설계한다. 이번에는 AI 요청 버튼의 임의 실행만 제거한다. 버튼은 현재 화면·선택 대상을 전달해 기존 채팅만 연다. 고정 요청·작업 후보·새 승인 단계는 추가하지 않는다. 채팅 전송만 실행이며 클리어 전 native CLI ID로 resume, 클리어 뒤 다음 요청만 새 세션이다.
+- 2026-09-13 요청 수정 완료: `SCREEN_REQUESTS`는 화면 이름만 보관한다. `/agent/requests`는 실제 메시지를 필수로 검증하고 빈 요청에 세션을 생성하지 않는다. 전송 시 현재 화면/대상을 전달하며 기존 대화를 이어 쓴다. CLI 지시에서도 화면 정보나 분석 질문을 설정/등록 실행으로 확대하지 않도록 정정했다. AI 19/19·데스크톱 23/23·타입·빌드 통과, 12개 화면 버튼 열기/닫기 실행 0건과 명시적 전송을 Electron에서 확인했다. [검증](../../../docs/verification.md#2026-09-13-ai-요청-자동-전송-제거).
 - 완료: Phase 15 요청 기반 CLI/MCP 도구·채팅·화면 버튼·자료 결과와 검증. 프로젝트별 대화와 전체 운영 대화는 각각 native ID/제공자/대화/요청 범위를 SQLite에 저장한다. 제공자 고정, ID 누락 시 새 세션 fallback 차단, clear 중 재요청 차단과 늦은 콜백 격리, 새 작업 디렉터리를 적용했다.
 - 2026-09-13 후속: Electron 탐색 차단이 자체 reload까지 막던 모드 전환 멈춤을 수정했다. `main.ts`에서 기존 신뢰 URL 판정을 재사용한다. `scripts/verify-desktop-mode.mjs`가 실제 IPC/페이지 재로딩/모드 분리를 검증한다(수정 전 5초 실패, 수정 후 40~393ms). 관련 23/23·타입·빌드 통과, 일반 앱 재실행 완료. [검증과 재현](../../../docs/verification.md#2026-09-13-electron-모드-전환-멈춤). 이 수정의 남은 항목은 없으며 기존 장기 수용 범위는 그대로다.
 - 등록 요청 범위: 실제 프로젝트 근거·문구·PNG 생성, 기존 계정/앱 매핑·큐 재사용. 문구 반영과 이미지 업로드 근거가 있어야 등록 완료다. 브라우저/이미지 도구는 CLI 설정을 활용하며 도구 부재·로그인·계약·알 수 없는 필수값만 요청한다. 원본 수정·빌드·심사·공개·광고·SNS 전송은 제외한다.
@@ -13,8 +14,8 @@ Last Updated: 2026-09-13
 - 검증: 관련 25/25, 타입·빌드 통과. 전체 451개: 409 pass / 36 fail / 6 skip. 깨끗한 HEAD 434개: 392 pass / 동일 36 fail / 6 skip. 신규 실패 0; 전체 성공으로 간주하지 않는다. macOS Electron 실제 창에서 버튼·선택·채팅·클리어·재기동 보존·PNG 결과·배치를 확인했다. [근거](../../../docs/verification-assets/ai-requests-20260913.md).
 - 2차 기획: [성장 운영 v2](../ai-growth-operations/ai-growth-operations-plan-v2.md). Orca Sol/high 워커 2회 dispatch로 문서만 작성·보완했고 해제/ack 완료. 광고 실험·수익률·커뮤니티 주기 실행은 구현하지 않았다.
 - 남은 제한: 실제 CLI 모델 호출·인증, CLI에 설정된 browser/image 도구, 스토어 실계정 반영, Windows/Linux 네이티브는 미검증. 기존 전체 검사 실패는 baseline에서도 재현됐으며 새 테스트를 skip하거나 제품 경계를 낮추지 않았다. Vite 500 kB 청크 경고가 있다.
-- 기존 다른 작업자의 ui.tsx/styles.css 변경을 보존했다. 커밋/push/외부 게시 없이 변경을 남긴다. 전달물·원시 검증 로그·화면은 tmp/ai-requests-20260913에 보관하며 tmp/를 Git ignore에 등록했다.
-- 다음: 이번 구현 범위의 잔여 항목은 없다. 실계정 검증 또는 2차 구현 요청 시 해당 계획의 조건부터 진행한다. 재검사 명령: node --import tsx --test tests/project-agent.test.ts tests/desktop-mode.test.ts; npm run typecheck; npm run build.
+- 기존 다른 작업자의 ui.tsx/styles.css 변경은 커밋에서 제외해 보존한다. 사용자 요청에 따라 모드 수정과 AI 요청 수정을 별도 커밋하며 push/외부 게시하지 않는다. 기존 검증 자료는 tmp/ai-requests-20260913, 이번 화면 증거는 tmp/ai-request-review-20260913에 둔다.
+- 다음: 이번 버그 수정의 잔여 항목은 없다. 요청 UX는 사용자의 재설계가 제시되면 진행한다. 재검사 명령: node --import tsx --test tests/project-agent.test.ts tests/desktop-mode.test.ts tests/desktop-security.test.ts; npm run typecheck; npm run build.
 
 ### 2026-09-12 — 이전 실행 계약 (이력)
 

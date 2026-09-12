@@ -17,6 +17,7 @@ import type { AgentState, AgentTask } from '../packages/agent/types.js';
 import type { AgentOptions } from '../apps/controller/agent.js';
 import type { Connection, Project, Run } from '../packages/domain/index.js';
 import type { Connector } from '../packages/connectors/types.js';
+import { SCREEN_REQUESTS } from '../packages/agent/requests.js';
 
 const listing = { title: '별자리 퍼즐', shortDescription: '별을 연결해 퍼즐을 풀어요.', fullDescription: '별을 연결하는 퍼즐 게임입니다.', language: 'ko-KR', category: 'GAME_PUZZLE', evidence: ['README.md'] };
 const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><rect width="512" height="512" fill="#13264b"/><path d="M256 70 L310 206 L455 215 L340 309 L378 452 L256 370 L134 452 L172 309 L57 215 L202 206Z" fill="#ffd15c"/></svg>';
@@ -53,6 +54,43 @@ async function settled(get: () => AgentTask | undefined) {
   throw new Error('Agent did not settle');
 }
 
+test('a screen without a user message cannot launch AI or append an invented request', async t => {
+  let calls = 0;
+  const fixture = await setup(t, { discover: async () => [{ provider: 'codex', executable: '/fixture' }], run: async () => { calls++; } });
+  const project = await fixture.api<Project>('/projects', 'POST', { path: fixture.projectPath });
+  for (const screen of Object.keys(SCREEN_REQUESTS)) {
+    for (const message of [undefined, '', '   ']) {
+      const response = await fetch(`http://127.0.0.1:${fixture.controller.port}/api/agent/requests`, {
+        method: 'POST', headers: { Authorization: `Bearer ${fixture.controller.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ screen, projectId: project.id, message }),
+      });
+      assert.equal(response.status, 400, `${screen}: an explicit message is required`);
+    }
+  }
+  assert.equal(fixture.controller.service.agent.tasks().length, 0);
+  assert.equal(calls, 0);
+});
+
+test('the exact edited request and current selection reach the same native conversation', async t => {
+  const invocations: AgentInvocation[] = [];
+  const fixture = await setup(t, { discover: async () => [{ provider: 'codex', executable: '/fixture' }], run: async input => { invocations.push(input); input.onMessage?.('요청한 내용만 답변합니다.'); } });
+  const message = '새 계정을 연결하려고 해. 지원하는 서비스부터 설명해 줘. 아직 연결하지 마.';
+  const first = await fixture.api<AgentTask>('/agent/requests', 'POST', { screen: 'connections', connectionId: fixture.connection.id, message });
+  await settled(() => fixture.controller.service.agent.tasks()[0]);
+  while (fixture.controller.service.agent.busy) await delay(5);
+  const secondMessage = '광고 성과 표에 대해 설명만 해 줘.';
+  await fixture.api('/agent/requests', 'POST', { screen: 'marketing', message: secondMessage });
+  const second = await settled(() => fixture.controller.service.agent.tasks()[0]);
+  assert.equal(second.id, first.id);
+  assert.equal(invocations[1]?.sessionId, second.sessionId);
+  assert.deepEqual(second.conversation.filter(entry => entry.role === 'user').map(entry => entry.text), [message, secondMessage]);
+  assert.equal(second.requestContext?.screen, 'marketing');
+  assert.equal(second.requestContext?.connectionId, undefined, 'previous account selection must not leak');
+  assert.ok(invocations[0]?.prompt.endsWith(message));
+  assert.ok(invocations[1]?.prompt.endsWith(secondMessage));
+  assert.equal(second.runIds.length, 0);
+});
+
 test('project registration is passive; an explicit request drives HTTP tools, images and the store queue', async t => {
   let calls = 0;
   const { api, controller, projectPath } = await setup(t, { discover: async () => [{ provider: 'codex', executable: '/test/codex' }], run: async invocation => {
@@ -77,7 +115,7 @@ test('project registration is passive; an explicit request drives HTTP tools, im
   } });
   const project = await api<Project>('/projects', 'POST', { path: projectPath });
   assert.equal(controller.service.agent.tasks().length, 0);
-  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id });
+  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id, message: '프로젝트 자료를 준비해서 스토어에 등록해 줘.' });
   const task = await settled(() => controller.service.agent.tasks().find(task => task.projectId === project.id));
   assert.equal(task.status, 'completed', task.message); assert.equal(calls, 1); assert.equal(task.images.length, 1); assert.equal(task.runIds.length, 2);
   const preview = await api<{ dataUrl: string }>(`/agent/${task.id}/image`, 'POST', { mediaAssetId: task.images[0]!.mediaAssetId });
@@ -92,7 +130,7 @@ test('missing selected CLI creates one actionable task without silently switchin
   await api('/agent/settings', 'PUT', { provider: 'opencode' });
   const project = await api<Project>('/projects', 'POST', { path: projectPath });
   assert.equal(controller.service.agent.tasks().length, 0);
-  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id });
+  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id, message: '프로젝트 자료를 준비해서 스토어에 등록해 줘.' });
   const task = await settled(() => controller.service.agent.tasks().find(task => task.projectId === project.id));
   assert.equal(task.status, 'needs_user'); assert.match(task.question!.message, /opencode/); assert.equal(calls, 0);
 });
@@ -105,7 +143,7 @@ test('necessary input resumes the same task and retains generated copy without r
     else { const context = await call<{ task: AgentTask }>('context'); assert.equal(context.task.listing?.title, listing.title); assert.equal(context.task.conversation.at(-1)?.text, 'https://example.com/privacy'); await call('ask_user', { kind: 'login', message: '스토어 로그인만 완료해 주세요.', url: 'https://play.google.com/console' }); }
   } });
   const project = await api<Project>('/projects', 'POST', { path: projectPath });
-  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id });
+  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id, message: '프로젝트 자료를 준비해서 스토어에 등록해 줘.' });
   const task = await settled(() => controller.service.agent.tasks()[0]);
   while (controller.service.agent.busy) await delay(5);
   await api(`/agent/${task.id}/resume`, 'POST', { answer: 'https://example.com/privacy' });
@@ -128,7 +166,7 @@ test('scope, generated screenshot, script artwork and false completion are rejec
     await call('ask_user', { message: '로그인이 필요합니다.', kind: 'login' });
   } });
   const project = await api<Project>('/projects', 'POST', { path: projectPath });
-  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id }); await settled(() => controller.service.agent.tasks()[0]); assert.equal(checked.length, 6);
+  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id, message: '프로젝트 자료를 준비해서 스토어에 등록해 줘.' }); await settled(() => controller.service.agent.tasks()[0]); assert.equal(checked.length, 6);
 });
 
 test('task bridge rejects unauthenticated, cross-origin and oversized requests and expires after the worker', async t => {
@@ -141,7 +179,7 @@ test('task bridge rejects unauthenticated, cross-origin and oversized requests a
     await client(invocation)('ask_user', { message: '로그인 필요', kind: 'login' });
   } });
   const project = await api<Project>('/projects', 'POST', { path: projectPath });
-  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id }); await settled(() => controller.service.agent.tasks()[0]);
+  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id, message: '프로젝트 자료를 준비해서 스토어에 등록해 줘.' }); await settled(() => controller.service.agent.tasks()[0]);
   while (controller.service.agent.busy) await delay(5);
   await assert.rejects(fetch(endpoint, { method: 'POST', headers: { Authorization: 'Bearer ' + token }, body: '{}' }));
   assert.ok(!(JSON.stringify(await api('/agent'))).includes(token));
@@ -151,7 +189,7 @@ test('cancel aborts the running CLI and prevents late completion', async t => {
   let invoked = false;
   const { controller, projectPath, api } = await setup(t, { discover: async () => [{ provider: 'codex', executable: '/fixture' }], run: async invocation => { invoked = true; await delay(30_000, undefined, { signal: invocation.signal }); } });
   const project = await api<Project>('/projects', 'POST', { path: projectPath });
-  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id });
+  await api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id, message: '프로젝트 자료를 준비해서 스토어에 등록해 줘.' });
   while (!invoked) await delay(5);
   const task = controller.service.agent.tasks()[0]!;
   await api(`/agent/${task.id}/cancel`, 'POST', {});
@@ -196,7 +234,7 @@ test('both CLI commands preserve user configuration, scope MCP and keep bridge c
   }
 });
 
-for (const provider of ['codex', 'opencode'] as const) test(`${provider}: button/chat/restart resume the exact session until clear; provider and artifacts are retained`, async t => {
+for (const provider of ['codex', 'opencode'] as const) test(`${provider}: submitted requests/chat/restart resume the exact session until clear; provider and artifacts are retained`, async t => {
   const invocations: AgentInvocation[] = [];
   const fixture = await setup(t, {
     discover: async () => [{ provider: 'codex', executable: '/fixture' }, { provider: 'opencode', executable: '/fixture' }],
@@ -206,7 +244,7 @@ for (const provider of ['codex', 'opencode'] as const) test(`${provider}: button
   const project = await fixture.api<Project>('/projects', 'POST', { path: fixture.projectPath });
   await fixture.api('/state'); await fixture.api('/agent');
   assert.equal(invocations.length, 0, 'registration and state reads must not execute AI');
-  await fixture.api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id });
+  await fixture.api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id, message: '프로젝트 자료를 준비해서 스토어에 등록해 줘.' });
   const original = await settled(() => fixture.controller.service.agent.tasks()[0]);
   assert.ok(original.sessionId); assert.equal(original.conversation.length, 2);
   assert.equal(invocations[0]?.sessionId, undefined);
@@ -228,7 +266,7 @@ for (const provider of ['codex', 'opencode'] as const) test(`${provider}: button
   assert.equal(cleared.conversation.length, 0); assert.equal(cleared.listing?.title, listing.title);
   assert.notEqual(cleared.sessionGeneration, original.sessionGeneration);
   assert.equal(invocations.length, 2, 'clear must not start the next session');
-  await fixture.api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id });
+  await fixture.api('/agent/requests', 'POST', { screen: 'projects', projectId: project.id, message: '프로젝트 자료를 준비해서 스토어에 등록해 줘.' });
   await settled(() => fixture.controller.service.agent.tasks()[0]);
   assert.equal(invocations[2]?.sessionId, undefined);
   assert.notEqual(invocations[2]?.provider, provider);
@@ -242,7 +280,7 @@ test('clear waits for the old worker, blocks concurrent requests and fences late
     running = invocation; await new Promise<void>(resolve => { release = resolve; });
     invocation.onMessage?.('늦은 응답'); invocation.onSessionId?.('late-session');
   } });
-  const task = await fixture.api<AgentTask>('/agent/requests', 'POST', { screen: 'dashboard' });
+  const task = await fixture.api<AgentTask>('/agent/requests', 'POST', { screen: 'dashboard', message: '현재 상태를 설명해 줘.' });
   while (!running) await delay(5);
   assert.equal(task.projectId, null);
   const clear = fixture.api<AgentTask>(`/agent/${task.id}/clear`, 'POST', {});
@@ -260,7 +298,7 @@ test('screen requests preserve selected account, expose current data and reject 
   const fixture = await setup(t, { discover: async () => [{ provider: 'codex', executable: '/fixture' }], run: async invocation => {
     currentContext = await client(invocation)('context'); invocation.onMessage?.('선택한 계정을 분석했습니다.');
   } });
-  const task = await fixture.api<AgentTask>('/agent/requests', 'POST', { screen: 'connections', connectionId: fixture.connection.id });
+  const task = await fixture.api<AgentTask>('/agent/requests', 'POST', { screen: 'connections', connectionId: fixture.connection.id, message: '선택한 계정의 연결 상태를 설명해 줘.' });
   await settled(() => fixture.controller.service.agent.tasks()[0]);
   assert.equal(task.requestContext?.screen, 'connections');
   assert.deepEqual((currentContext.connections as Connection[]).map(conn => conn.id), [fixture.connection.id]);

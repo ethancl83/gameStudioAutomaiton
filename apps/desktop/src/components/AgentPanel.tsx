@@ -3,14 +3,14 @@ import { Bot, ExternalLink, FolderPlus, Pause, Send, Eraser, RefreshCw } from 'l
 import { api } from '../api';
 import { Card, Field, Notice, Spinner } from './ui';
 import type { AppState } from '../../../../packages/domain';
-import type { AgentImage, AgentSettings, AgentState, AgentTask } from '../../../../packages/agent/types';
+import type { AgentImage, AgentRequestContext, AgentSettings, AgentState, AgentTask } from '../../../../packages/agent/types';
 import { SCREEN_REQUESTS } from '../../../../packages/agent/requests';
 import { AgentActions } from './AgentActions';
 import './agent.css';
 
 const labels: Record<AgentTask['status'], string> = { idle: '요청 대기', queued: '준비 중', running: 'AI 작업 중', needs_user: '답변 대기', failed: '중단됨', cancelled: '중지됨', completed: '등록 완료' };
 
-export function AgentPanel({ state, projectId, onRegister }: { state: AppState; projectId?: string | null; onRegister?: () => void }) {
+export function AgentPanel({ state, projectId, requestContext, onRegister }: { state: AppState; projectId?: string | null; requestContext?: AgentRequestContext; onRegister?: () => void }) {
   const controlId = useId();
   const { setScope } = useContext(AgentActions);
   const [agent, setAgent] = useState<AgentState | null>(null);
@@ -31,13 +31,14 @@ export function AgentPanel({ state, projectId, onRegister }: { state: AppState; 
   }, []);
   useEffect(() => { void reload(); const timer = setInterval(() => void reload(), 1500); return () => clearInterval(timer); }, [reload]);
   const task = agent?.tasks.find(item => item.projectId === (activeId || null));
+  const context: AgentRequestContext = { ...requestContext, screen: requestContext?.screen ?? 'agent', projectId: activeId || undefined };
   const running = task?.status === 'running' || task?.status === 'queued';
   useEffect(() => { bottom.current?.scrollIntoView({ block: 'nearest' }); }, [task?.conversation.length, activeId]);
   useEffect(() => { setDraft(''); setError(''); }, [activeId]);
   async function action(kind: 'send' | 'clear' | 'cancel') {
     setPending(true); setError('');
     try {
-      const result = kind === 'send' ? task ? await api.resumeAgent(task.id, draft.trim()) : await api.requestAgent({ screen: 'agent', projectId: activeId || undefined, message: draft.trim() })
+      const result = kind === 'send' ? await api.requestAgent({ ...context, message: draft.trim() })
         : task ? kind === 'clear' ? await api.clearAgent(task.id) : await api.cancelAgent(task.id) : null;
       if (result && !result.ok) setError(result.error.message);
       else { if (kind !== 'cancel') setDraft(''); await reload(); }
@@ -51,7 +52,8 @@ export function AgentPanel({ state, projectId, onRegister }: { state: AppState; 
   const project = state.projects.find(item => item.id === activeId);
   return <Card title={`${project?.name ?? '전체 운영'} · AI 대화`} icon={Bot}>
     <div className="agent-chat">
-      <p className="muted agent-chat__intro">채팅이나 각 화면의 AI 요청 버튼으로 시작하세요. 클리어 전까지 같은 대화를 이어갑니다.</p>
+      <p className="muted agent-chat__intro">원하는 요청을 작성한 뒤 전송하세요. 클리어 전까지 같은 대화를 이어갑니다.</p>
+      {requestContext && <p className="small muted" style={{ margin: 0 }}>현재 화면: {SCREEN_REQUESTS[context.screen].label} · 대상: {project?.name ?? '전체 운영'}{context.connectionId && ` · 계정: ${state.connections.find(conn => conn.id === context.connectionId)?.label ?? '선택한 계정'}`}</p>}
       <div className="agent-chat__controls">
         {projectId === undefined && <Field label="대화 대상" htmlFor={`${controlId}-project`}>
           <select id={`${controlId}-project`} className="select" value={activeId} onChange={event => setSelectedId(event.target.value)} disabled={pending}>
@@ -68,7 +70,7 @@ export function AgentPanel({ state, projectId, onRegister }: { state: AppState; 
       </div>
       {api.isDemo() ? <Notice tone="info">데모에서는 실제 AI를 실행하지 않습니다.</Notice> : agent && !agent.runtimes.some(runtime => runtime.executable) && <Notice tone="warn">Codex 또는 OpenCode CLI 설치·로그인이 필요합니다.</Notice>}
       <div className="agent-chat__messages" role="log" aria-label="AI 대화" aria-live="polite">
-        {!task?.conversation.length && <div className="agent-chat__empty"><Bot size={28} /><p>어떤 작업을 도와드릴까요?</p><span>화면의 AI 요청 버튼을 누르면 내용을 입력하지 않아도 됩니다.</span></div>}
+        {!task?.conversation.length && <div className="agent-chat__empty"><Bot size={28} /><p>어떤 작업을 도와드릴까요?</p><span>원하는 요청을 작성해 주세요.</span></div>}
         {task?.conversation.map((entry, index) => <div key={`${task.sessionGeneration}-${index}`} className={`agent-message agent-message--${entry.role}`}>
           <strong>{entry.role === 'user' ? '나' : task.provider === 'opencode' ? 'OpenCode' : 'AI'}{entry.context && ` · ${SCREEN_REQUESTS[entry.context.screen].label}`}{entry.context?.connectionId && ` · ${state.connections.find(conn => conn.id === entry.context?.connectionId)?.label ?? '선택한 계정'}`}</strong><div>{entry.text}</div>
         </div>)}
@@ -78,7 +80,7 @@ export function AgentPanel({ state, projectId, onRegister }: { state: AppState; 
       {task?.question?.url && <button className="btn" onClick={async () => { const result = await api.openExternal(task.question!.url!); if (!result.ok) setError(result.error ?? '서비스를 열지 못했습니다.'); }}><ExternalLink size={14} />서비스에서 계속</button>}
       <form className="agent-chat__composer" onSubmit={event => { event.preventDefault(); if (draft.trim() && !running && !pending) void action('send'); }}>
         <label className="sr-only" htmlFor={`${controlId}-message`}>AI에게 요청</label>
-        <textarea id={`${controlId}-message`} className="textarea" value={draft} maxLength={8000} rows={3} onChange={event => setDraft(event.target.value)} placeholder="요청이나 답변을 입력하세요. Enter로 전송, Shift+Enter로 줄바꿈" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (draft.trim() && !running && !pending) void action('send'); } }} />
+        <textarea id={`${controlId}-message`} className="textarea" value={draft} maxLength={8000} rows={3} onChange={event => setDraft(event.target.value)} placeholder="원하는 요청을 입력하세요. Enter로 전송, Shift+Enter로 줄바꿈" onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (draft.trim() && !running && !pending) void action('send'); } }} />
         <button className="btn btn--primary" type="submit" disabled={!agent || !draft.trim() || running || pending}>{pending ? <Spinner /> : <Send size={15} />}전송</button>
       </form>
       {error && <Notice tone="error">{error}</Notice>}

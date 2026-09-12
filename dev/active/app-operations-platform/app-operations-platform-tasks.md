@@ -370,4 +370,6 @@ Acceptance: [v5](app-operations-platform-plan-v5.md)의 이번 완료 조건을 
 
 2026-09-13 후속: 자체 reload 차단으로 멈추던 모드 전환 수정. 네이티브 전환·취소·모드 격리 회귀 검사 및 관련 23/23·타입·빌드 통과. [재현 명령과 결과](../../../docs/verification.md#2026-09-13-electron-모드-전환-멈춤).
 
+2026-09-13 요청 수정: [v8](app-operations-platform-plan-v8.md)에 따라 버튼은 기존 채팅만 열고, 서버는 실제 메시지 없는 실행을 거부한다. 새 요청 흐름은 사용자가 재설계한다. AI 19/19·데스크톱 23/23·타입·빌드와 12개 화면의 무실행을 확인했다. [검증](../../../docs/verification.md#2026-09-13-ai-요청-자동-전송-제거) · [사용법](../../../docs/ai-operations.md).
+
 검증: AI/Electron 관련 25/25, 타입·빌드 통과. 전체 451개 중 409 통과·36 실패·6 skip이며 깨끗한 HEAD의 36개 실패와 동일하다. 실서비스 검증으로 표시하지 않는다. 실제 Electron은 별도 DB·CLI 대역으로 버튼/대화/resume/clear/이미지를 확인했다. [상세 결과](../../../docs/verification-assets/ai-requests-20260913.md) · [사용법](../../../docs/ai-operations.md). 2차 기능은 [별도 기획](../ai-growth-operations/ai-growth-operations-plan-v2.md)으로만 전달했다. 기존 실계정·OS·장기 수용 42개는 유지한다.
