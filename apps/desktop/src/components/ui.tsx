@@ -1,5 +1,6 @@
 // 공용 UI 요소. 상태·오류·대기·빈 상태를 일관되게 표현한다.
 import { useEffect, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -186,7 +187,8 @@ export function Modal({
     };
   }, [onClose]);
 
-  return (
+  // 상단바의 sticky+backdrop-filter가 fixed 포함 블록이 되므로, 모달은 body로 포탈한다.
+  return createPortal(
     <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         className={`modal${wide ? ' modal--wide' : ''}`}
@@ -209,7 +211,8 @@ export function Modal({
         <div className="modal__body">{children}</div>
         {footer && <div className="modal__foot">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

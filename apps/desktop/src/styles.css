@@ -671,6 +671,7 @@ button {
 }
 
 /* --- 모달 --- */
+/* overlay는 document.body에 포탈된다. 상단바 sticky/backdrop-filter 포함 블록에 갇히지 않게 한다. */
 .modal-overlay {
   position: fixed;
   inset: 0;
