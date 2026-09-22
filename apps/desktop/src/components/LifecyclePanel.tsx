@@ -1,7 +1,7 @@
 // 앱/제어 서비스 수명주기 패널.
-// - 제어 서비스는 화면(창)과 독립 실행된다. 창을 닫아도 인가된 자동화는 계속 실행된다.
+// - 마지막 창을 닫거나 앱을 종료하면 제어 서비스와 실행 중인 작업도 함께 종료된다.
 // - 중지/재시작은 명시적 조치이며 IPC로 동작하므로 HTTP(/state)가 끊겨도 사용할 수 있다.
-// - 데모 모드는 실제 제어 서비스·OS 자동 시작을 절대 바꾸지 않는다(변경 버튼 비활성, 상태는 읽기 전용).
+// - 데모에서는 변경 버튼을 비활성화한다. 앱 종료 시 정리는 모드와 무관하게 main이 수행한다.
 // - 브라우저(비 Electron)에서는 데스크톱 전용 제어임을 안내하고 조작을 노출하지 않는다.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CircleStop, Power, RefreshCw, ServerCog, ShieldAlert, Sunrise } from 'lucide-react';
@@ -133,14 +133,12 @@ export function LifecyclePanel() {
     >
       <div className="stack">
         <p className="muted" style={{ margin: 0 }}>
-          제어 서비스는 창과 별개로 실행됩니다. 앱(창)을 닫아도 인가된 자동화는 계속 실행되며, 중지·재시작은 명시적
-          조치입니다.
+          앱을 종료하거나 마지막 창을 닫으면 실행 중인 AI와 작업, 제어 서비스가 함께 종료됩니다.
         </p>
 
         {demo && (
           <Notice tone="info" title="데모 모드">
-            데모에서는 실제 제어 서비스나 OS 자동 시작을 바꾸지 않습니다. 아래 상태는 실제 데스크톱 제어 서비스를 읽기
-            전용으로 보여 줍니다.
+            데모에서는 아래 상태를 읽기 전용으로 보여 줍니다. 앱 종료 시에는 모든 모드의 실행 중인 작업을 함께 정리합니다.
           </Notice>
         )}
 

@@ -135,6 +135,44 @@ test('stopController escalates to SIGKILL when a verified controller ignores SIG
   assert.equal(out.stopped, true);
 });
 
+test('stopController waits for process cleanup after HTTP has already closed', async () => {
+  const info: ControllerInfo = { port: 4317, token: 't', pid: 777, startedAt: 'A' };
+  let stopping = false;
+  let ticks = 0;
+  const signals: Array<string> = [];
+  const outcome = await stopController({
+    readInfo: async () => stopping ? null : info,
+    checkHealth: async () => !stopping,
+    spawnController: () => ({}),
+    killPid: (_pid, signal) => { stopping = true; signals.push(String(signal)); return true; },
+    isProcessRunning: () => ticks < 3,
+    delay: async () => { ticks++; },
+    now: () => ticks * 100,
+  }, { pollIntervalMs: 100 });
+  assert.equal(outcome.stopped, true);
+  assert.equal(ticks, 3, 'HTTP shutdown must not bypass ongoing CLI/process cleanup');
+  assert.deepEqual(signals, ['SIGTERM']);
+});
+
+test('stopController forces a lingering process even when its HTTP endpoint is gone', async () => {
+  const info: ControllerInfo = { port: 4317, token: 't', pid: 777, startedAt: 'A' };
+  let stopping = false;
+  let alive = true;
+  let clock = 0;
+  const signals: string[] = [];
+  const outcome = await stopController({
+    readInfo: async () => stopping ? null : info,
+    checkHealth: async () => !stopping,
+    spawnController: () => ({}),
+    killPid: (_pid, signal) => { stopping = true; signals.push(String(signal)); if (signal === 'SIGKILL') alive = false; return true; },
+    isProcessRunning: () => alive,
+    delay: async ms => { clock += ms; },
+    now: () => clock,
+  }, { stopTimeoutMs: 300, pollIntervalMs: 100 });
+  assert.equal(outcome.stopped, true);
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+});
+
 test('restartController stops then starts a fresh controller', async () => {
   let alive = true;
   let info: ControllerInfo | null = { port: 4317, token: 't', pid: 1, startedAt: 'A' };

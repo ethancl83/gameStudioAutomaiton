@@ -1,7 +1,6 @@
-// 앱과 제어 서비스의 수명주기 분리.
-// - 앱(화면)이 종료돼도 인가된 제어 서비스 자동화는 계속 실행한다(detached 기동).
+// 제어 서비스 기동·중지. 데스크톱은 앱 종료 시에도 중지 경로를 호출한다.
 // - 건강한 제어 서비스가 이미 있으면 새로 띄우지 않고 인수한다(단일 인스턴스).
-// - 명시적 중지만 제어 서비스를 종료하며, 기동 실패 시 남은 프로세스를 정리한다(고아 방지).
+// - 명시적 중지·앱 종료 시 서비스를 정리하고, 기동 실패 시 남은 프로세스를 정리한다.
 //
 // 모든 부수효과(파일 읽기, 헬스 체크, 프로세스 기동/종료)는 주입해 독립 테스트가 가능하다.
 
@@ -16,10 +15,12 @@ export interface ControllerDeps {
   readInfo: (force?: boolean) => Promise<ControllerInfo | null>;
   // /health 응답이 정상인지 확인한다.
   checkHealth: (info: ControllerInfo) => Promise<boolean>;
-  // 제어 서비스를 별도(detached) 프로세스로 기동한다. 실제 구현에서 unref()로 앱 종료와 분리한다.
+  // 제어 서비스를 별도 프로세스로 기동한다. 호출자가 앱 종료 시 stopController를 호출한다.
   spawnController: () => SpawnResult | Promise<SpawnResult>;
   // pid에 신호를 보낸다. 성공하면 true. 존재하지 않으면 false.
   killPid: (pid: number, signal: NodeJS.Signals | number) => boolean;
+  // HTTP가 먼저 닫혀도 CLI·작업 정리가 끝날 때까지 실제 프로세스 종료를 기다린다.
+  isProcessRunning?: (pid: number) => boolean;
   now?: () => number;
   delay?: (ms: number) => Promise<void>;
   // 내구성 있는 명시적 중지 표식. 주입하면 stopController가 표식을 남기고(강제 종료 후에도
@@ -110,8 +111,8 @@ export async function ensureController(deps: ControllerDeps, options: EnsureOpti
   };
 }
 
-// 명시적 중지: controller.json의 소유자 pid에 SIGTERM을 보내고 헬스가 내려갈 때까지 기다린다.
-// 정상 종료되지 않으면 SIGKILL로 승격한다. 앱 종료(창 닫기)와 구분되는 유일한 종료 경로다.
+// controller.json의 소유자 pid에 SIGTERM을 보내고 프로세스 종료를 기다린다.
+// 정상 종료되지 않으면 SIGKILL로 승격한다. 데스크톱 앱 종료에도 같은 경로를 사용한다.
 //
 // PID 재사용 안전성: checkHealth는 인증된 신원 확인이어야 한다(우리 토큰을 받아들이고
 // controller.json의 startedAt과 일치하는 인스턴스가 지금 살아 있음을 증명). 이 확인을
@@ -143,6 +144,10 @@ export async function stopController(deps: ControllerDeps, options: StopOptions 
   const poll = options.pollIntervalMs ?? DEFAULT_POLL;
   while (now() < deadline) {
     await delay(poll);
+    if (deps.isProcessRunning) {
+      if (!deps.isProcessRunning(info.pid)) return { stopped: true, wasRunning, pid: info.pid };
+      continue;
+    }
     const current = await deps.readInfo(true);
     if (!current) return { stopped: true, wasRunning, pid: info.pid };
     if (!(await deps.checkHealth(current))) return { stopped: true, wasRunning, pid: info.pid };
@@ -150,6 +155,11 @@ export async function stopController(deps: ControllerDeps, options: StopOptions 
 
   // 정상 종료 실패 시 강제 종료.
   const killed = deps.killPid(info.pid, 'SIGKILL');
+  if (deps.isProcessRunning) {
+    const killDeadline = now() + 2000;
+    while (now() < killDeadline && deps.isProcessRunning(info.pid)) await delay(poll);
+    return { stopped: !deps.isProcessRunning(info.pid), wasRunning, pid: info.pid };
+  }
   return { stopped: killed, wasRunning, pid: info.pid };
 }
 

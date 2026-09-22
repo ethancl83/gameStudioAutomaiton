@@ -123,7 +123,15 @@ export class AppService {
     this.scheduler.start();
     this.store.addEvent({ kind: 'controller.started', message: '운영 제어 서비스를 시작했습니다.' });
   }
-  async stop(): Promise<void> { this.closing=true;this.pipelines.stop(); await this.agent.close(); await this.backups.close(); await this.preparation.close(); await this.operations.stop(); await this.scheduler.stop(); await this.queue.stop(); }
+  async stop(): Promise<void> {
+    this.closing = true;
+    this.pipelines.stop();
+    // 각 종료 함수가 먼저 타이머/프로세스를 중지한다. AI 종료를 기다리는 동안
+    // 큐나 스케줄러가 다음 작업을 시작하지 않도록 모두 함께 중지한다.
+    const results = await Promise.allSettled([this.agent.close(), this.backups.close(), this.preparation.close(), this.operations.stop(), this.scheduler.stop(), this.queue.stop()]);
+    const failure = results.find(result => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
+  }
   async refreshTools(): Promise<Toolchain[]> {
     this.toolchains = await (this.options.scanToolchains ?? scanToolchains)(this.preparation.toolPaths());
     return this.toolchains;

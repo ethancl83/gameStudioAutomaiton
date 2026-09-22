@@ -1,14 +1,14 @@
 # 플랫폼 수명주기 · 설치 준비 (T-13.5)
 
-앱(화면)과 제어 서비스의 수명 분리, 단일 인스턴스/건강한 소유권, 깨끗한 기동 실패·복구,
+앱(화면)과 제어 서비스의 기동·종료, 단일 인스턴스/건강한 소유권, 기동 실패·복구,
 OS 사용자별 로그인 자동 시작, Linux 네이티브 샌드박스 기동, 설치/업데이트 설계를 다룬다.
 표면은 `packages/lifecycle/`의 순수·주입형 함수와 `apps/desktop/electron/main.ts`의 얇은 Electron 브리지로 나뉜다.
 
-## 1. 앱 / 제어 서비스 수명 분리
+## 1. 앱 / 제어 서비스 기동과 종료
 
-- **제어 서비스는 앱과 독립 실행된다.** 화면이 있는 Electron 앱과 별개로 제어 서비스(자동화 실행 주체)가 산다.
-- **앱(창)을 닫아도 인가된 자동화는 계속 실행된다.** `main.ts`는 제어 서비스를 `detached: true` + `child.unref()`로 기동해 앱 프로세스 종료와 분리한다. 창을 모두 닫으면(비 macOS) 앱은 종료되지만 제어 서비스는 살아 예약된 빌드/게시/SNS 작업을 이어간다.
-- **명시적 중지만 제어 서비스를 종료한다.** 창 닫기(quit)와 자동화 중지(stop)를 구분한다. 제어 서비스는 오직 `appops:lifecycle:stopController`(렌더러의 “자동화 중지”) 또는 명시적 Quit&Stop에서만 종료된다.
+- 제어 서비스는 별도 프로세스로 실행되며, 데스크톱 앱이 기동·종료를 관리한다.
+- [v9 종료 계약](../dev/active/app-operations-platform/app-operations-platform-plan-v9.md)에 따라 macOS를 포함한 마지막 창 닫기·앱 종료는 제어 서비스와 진행 중인 AI·작업을 함께 정리한다. 기동·재시작 중 종료해도 해당 기동이 끝난 뒤 서비스를 중지한다.
+- 화면의 명시적 중지와 앱 종료는 같은 서비스 중지 경로를 사용한다. 중지 표식은 서비스의 자동 재기동을 막고, 앱 재실행이나 다시 시작이 표식을 지운다. 강제 종료(SIGKILL)·전원 차단은 정상 종료 이벤트를 실행할 수 없으므로 이 계약에 포함하지 않는다.
 
 ## 2. 단일 인스턴스 · 건강한 소유권
 
@@ -23,7 +23,7 @@ OS 사용자별 로그인 자동 시작, Linux 네이티브 샌드박스 기동,
 1. 공개 `GET /api/health`의 `startedAt`이 `controller.json.startedAt`과 일치 → 그 포트의 인스턴스가 우리가 기록한 그 인스턴스임을 확인.
 2. 인증된 `GET /api/state`(Bearer 토큰)가 200 → 그 인스턴스가 우리 제어 서비스임을 증명.
 
-둘 다 통과할 때만 소유자 PID에 SIGTERM을 보내고, 헬스가 내려갈 때까지 대기한 뒤 필요하면 SIGKILL로 승격한다. 확인에 실패하면(죽은 `controller.json`, 포트를 차지한 다른 프로세스, 재사용된 PID) **신호를 보내지 않는다**. 새 서버 엔드포인트는 필요 없다(기존 `/api/health` + `/api/state` 조합).
+둘 다 통과할 때만 소유자 PID에 SIGTERM을 보내고, 실제 프로세스가 종료될 때까지 대기한 뒤 필요하면 SIGKILL로 승격한다. HTTP가 먼저 닫혀도 프로세스 정리가 끝난 것으로 처리하지 않는다. 확인에 실패하면(죽은 `controller.json`, 포트를 차지한 다른 프로세스, 재사용된 PID) **신호를 보내지 않는다**. 새 서버 엔드포인트는 필요 없다(기존 `/api/health` + `/api/state` 조합).
 
 ## 4. OS 사용자별 로그인 자동 시작
 
@@ -39,7 +39,7 @@ OS 사용자별 로그인 자동 시작, Linux 네이티브 샌드박스 기동,
 - **식별자**: 역DNS `local.appops.controller`(앱 appId `local.appops.desktop`와 정렬).
 - **경로/인자 인코딩**: 공식 규칙을 따른다 — Desktop Entry `Exec`(예약 문자 큰따옴표+`\` 이스케이프), Windows `CommandLineToArgvW`(백슬래시/따옴표), systemd `ExecStart` 인용, plist XML 이스케이프. 공백·특수문자가 든 경로도 안전하다.
 - **환경변수**: systemd `Environment=`, plist `EnvironmentVariables`, desktop `env` 래퍼, schtasks `cmd /c set` 래퍼로 주입한다.
-- **명시적 중지 존중**: 재시작 정책은 정상 종료(SIGTERM/exit 0)를 재기동하지 않도록 골랐다(systemd `on-failure`, LaunchAgent `KeepAlive=false`, schtasks 단발). 로그인 자동 시작이 사용자의 “자동화 중지”와 싸우지 않는다.
+- **명시적 중지 존중**: 재시작 정책과 `controller.stop` 표식을 함께 사용한다. 표식이 남아 있으면 로그인 자동 시작도 기동하지 않으며, 앱 재실행·다시 시작·런처의 명시적 시작으로 해제한다.
 
 ### 안정 설치 경로 요구
 
@@ -70,7 +70,7 @@ OS 사용자별 로그인 자동 시작, Linux 네이티브 샌드박스 기동,
 ### 패키징 권장
 
 - 앱 종료 후에도 지속되는 자동화가 목표라면 **deb/rpm 설치 + systemd user 서비스**(추출된 안정 바이너리)를 권장한다. AppImage는 프로세스 수명 동안만 자체 마운트를 유지하므로, 지속 실행은 헤드리스 `$APPIMAGE` 프로세스가 계속 살아 있어야 한다.
-- `electron-builder.json`은 현재 Linux `AppImage`만 대상으로 한다. setuid 샌드박스 자동 구성과 안정 경로를 위해 `deb`(또는 `rpm`) 타깃 추가를 권장한다. (이 문서 범위 밖의 `package.json`/`electron-builder.json` 변경은 root가 결정한다.)
+- `electron-builder.json`의 Linux 대상은 `deb`와 `AppImage`다. 생성된 패키지와 실제 설치·로그인 후 기동 검증은 구분한다.
 
 ## 7. 설치/업데이트 설계 (정직한 현재 상태)
 

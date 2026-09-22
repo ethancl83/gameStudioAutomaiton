@@ -90,6 +90,13 @@ interface ControllerInfo {
 
 let cached: { info: ControllerInfo | null; readAt: number } | null = null;
 let controllerChild: ReturnType<typeof spawn> | null = null;
+let shuttingDown = false;
+const controllerTasks = new Set<Promise<unknown>>();
+function trackController<T>(task: Promise<T>): Promise<T> {
+  controllerTasks.add(task);
+  void task.finally(() => controllerTasks.delete(task)).catch(() => {});
+  return task;
+}
 
 // 실행 모드(demo/live) 권한은 main이 소유·영속한다(renderer localStorage 밖). 안전 기본값은 데모.
 // - 모든 특권 변경(수명주기·자동 시작)·파일 브리지(백업 저장/가져오기)·일반 요청 라우팅이 이 값을
@@ -179,12 +186,14 @@ function resolveControllerLaunch(): { program: string; args: string[]; env: Reco
 async function verifyOwnController(info: ControllerInfo): Promise<boolean> {
   try {
     const base = apiBase(info);
-    const healthRes = await fetch(`${base}/health`, { headers: { accept: 'application/json' } });
+    const signal = AbortSignal.timeout(2000);
+    const healthRes = await fetch(`${base}/health`, { headers: { accept: 'application/json' }, signal });
     if (!healthRes.ok) return false;
     const health = (await healthRes.json().catch(() => null)) as { data?: { startedAt?: string } } | null;
     if (info.startedAt && health?.data?.startedAt && health.data.startedAt !== info.startedAt) return false;
     const stateRes = await fetch(`${base}/state`, {
       headers: { authorization: `Bearer ${info.token}`, accept: 'application/json' },
+      signal,
     });
     return stateRes.ok;
   } catch {
@@ -201,7 +210,7 @@ function makeControllerDeps(): ControllerDeps {
       const launch = resolveControllerLaunch();
       const child = spawn(launch.program, launch.args, {
         env: { ...process.env, ...launch.env },
-        detached: true, // 앱(화면)이 종료돼도 인가된 자동화가 계속 실행되도록 분리한다.
+        detached: true, // 작업 프로세스 그룹을 분리하되 앱 종료 시 명시적으로 정리한다.
         stdio: 'ignore',
       });
       child.unref();
@@ -216,6 +225,10 @@ function makeControllerDeps(): ControllerDeps {
       } catch {
         return false;
       }
+    },
+    isProcessRunning: (pid) => {
+      try { process.kill(pid, 0); return true; }
+      catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
     },
     // 내구성 있는 명시적 중지 표식(controller.stop). 강제 종료(SIGKILL) 후에도 서비스 매니저
     // 자동 재기동/로그인 자동 시작이 진입점에서 차단되게 한다. 명시적 시작은 표식을 지운다.
@@ -602,6 +615,7 @@ function registerIpc(): void {
     if (!isTrustedSender(e)) {
       return errorResult('forbidden', '신뢰할 수 없는 호출입니다.');
     }
+    if (shuttingDown) return errorResult('app_closing', '앱을 종료하고 있습니다.');
     return forwardRequest(method, path, body);
   });
 
@@ -645,18 +659,19 @@ function registerIpc(): void {
 
   ipcMain.handle('appops:lifecycle:stopController', async (e): Promise<ApiResult<{ stopped: boolean; wasRunning: boolean }>> => {
     if (!isTrustedSender(e)) return errorResult('forbidden', '신뢰할 수 없는 호출입니다.');
+    if (shuttingDown) return errorResult('app_closing', '앱을 종료하고 있습니다.');
     const blocked = demoBlocksMutation();
     if (blocked) return blocked;
-    // 명시적 중지: 창 닫기와 구분되는 유일한 제어 서비스 종료 경로. 신원 확인 후에만 PID를 종료한다.
-    const outcome = await stopControllerLifecycle(makeControllerDeps());
+    const outcome = await trackController(stopControllerLifecycle(makeControllerDeps()));
     return { ok: true, data: { stopped: outcome.stopped, wasRunning: outcome.wasRunning } };
   });
 
   ipcMain.handle('appops:lifecycle:restartController', async (e): Promise<ApiResult<{ running: boolean }>> => {
     if (!isTrustedSender(e)) return errorResult('forbidden', '신뢰할 수 없는 호출입니다.');
+    if (shuttingDown) return errorResult('app_closing', '앱을 종료하고 있습니다.');
     const blocked = demoBlocksMutation();
     if (blocked) return blocked;
-    const outcome = await restartControllerLifecycle(makeControllerDeps());
+    const outcome = await trackController(restartControllerLifecycle(makeControllerDeps()));
     if (outcome.status === 'failed') return errorResult(outcome.error.code, outcome.error.message);
     return { ok: true, data: { running: true } };
   });
@@ -779,11 +794,13 @@ async function createWindow(): Promise<void> {
   // IPC 신뢰 판정에 쓸 창의 webContents 신원을 기록한다(이 창에서 온 호출만 특권 작업 수행).
   const windowId = win.webContents.id;
   mainWindowId = windowId;
+  let closing = false;
+  win.on('close', () => { closing = true; });
   win.on('closed', () => {
     if (mainWindowId === windowId) mainWindowId = null;
   });
 
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => { if (!closing) win.show(); });
 
   // renderer가 외부 페이지로 이동하거나 새 창을 여는 것을 차단한다.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -799,13 +816,16 @@ async function createWindow(): Promise<void> {
     })) event.preventDefault();
   });
 
-  if (DEV_SERVER_URL) {
-    await win.loadURL(DEV_SERVER_URL);
-  } else {
-    // 프로덕션: Vite 빌드 결과(renderer)를 로드한다.
-    // main.js는 dist/apps/desktop/electron/에 위치하므로 ../renderer/index.html 로 해석된다.
-    // 신뢰 프레임 판정(PACKAGED_ENTRY_URL)과 동일한 경로 상수를 사용한다.
-    await win.loadFile(RENDERER_INDEX);
+  try {
+    if (DEV_SERVER_URL) {
+      await win.loadURL(DEV_SERVER_URL);
+    } else {
+      // 신뢰 프레임 판정(PACKAGED_ENTRY_URL)과 동일한 경로를 로드한다.
+      await win.loadFile(RENDERER_INDEX);
+    }
+  } catch (error) {
+    // 로딩 도중 창을 닫으면 Electron이 로드 Promise를 거절한다.
+    if (!closing) throw error;
   }
 }
 
@@ -835,7 +855,34 @@ if (CONTROLLER_ONLY) {
   if (!gotLock) {
     app.quit();
   } else {
+    let readyToQuit = false;
+    app.on('before-quit', event => {
+      if (readyToQuit) return;
+      event.preventDefault();
+      if (shuttingDown) return;
+      shuttingDown = true;
+      void (async () => {
+        // 기동/재시작 도중 닫아도 그 작업이 뒤늦게 서비스를 남기지 않게 한다.
+        await Promise.allSettled([...controllerTasks]);
+        const outcome = await stopControllerLifecycle(makeControllerDeps(), { pollIntervalMs: 100 });
+        if (outcome.wasRunning && !outcome.stopped) throw new Error('제어 서비스를 종료하지 못했습니다.');
+        // 기동 실패 등으로 HTTP 신원 확인 전에 남은 직접 자식도 정리한다.
+        const child = controllerChild;
+        if (child && child.exitCode === null && child.signalCode === null) {
+          await new Promise<void>(resolve => {
+            child.once('exit', () => { clearTimeout(timer); resolve(); });
+            const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
+            child.kill('SIGTERM');
+          });
+        }
+      })().catch(error => {
+        console.error('[appops] 종료 정리 실패', redactSecrets({ message: String(error) }));
+      }).finally(() => { readyToQuit = true; app.quit(); });
+    });
+    process.on('SIGINT', () => app.quit());
+    process.on('SIGTERM', () => app.quit());
     app.on('second-instance', () => {
+      if (shuttingDown) return;
       const win = BrowserWindow.getAllWindows()[0];
       if (win) {
         if (win.isMinimized()) win.restore();
@@ -845,18 +892,17 @@ if (CONTROLLER_ONLY) {
     app.whenReady().then(async () => {
       // 실행 모드 권한을 디스크에서 먼저 적재한다(없으면 데모). 창이 뜨기 전에 확정한다.
       await loadEffectiveMode();
+      if (shuttingDown) return;
       registerIpc();
       // 화면을 먼저 띄우고, 컨트롤러 준비는 백그라운드에서 진행한다(renderer는 준비될 때까지 재시도한다).
       void createWindow();
-      void ensureController();
+      void trackController(ensureController());
       app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+        if (!shuttingDown && BrowserWindow.getAllWindows().length === 0) void createWindow();
       });
     });
     app.on('window-all-closed', () => {
-      // 화면 종료는 제어 서비스 종료와 별개다: 인가된 자동화는 detached 제어 서비스로 계속 실행된다.
-      // 제어 서비스는 renderer의 명시적 중지(appops:lifecycle:stopController)에서만 종료된다.
-      if (process.platform !== 'darwin') app.quit();
+      app.quit();
     });
   }
 }
