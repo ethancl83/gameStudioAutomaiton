@@ -6,8 +6,16 @@ import type { Writable } from 'node:stream';
 import { AppError } from '../domain/errors.js';
 import { probeIsolation } from '../../apps/runner/sandbox.js';
 
+const TMPFS_MAGIC = 0x01021994;
+
+/** Private key files are created only on a Linux tmpfs. Other hosts fail closed before any key material is written. */
+export async function memoryKeyRuntimeAvailable(): Promise<boolean> {
+  if (process.platform !== 'linux') return false;
+  try { return (await statfs('/dev/shm')).type === TMPFS_MAGIC; } catch { return false; }
+}
+
 export async function secretWorkspace<T>(namespace: string, callback: (directory: string) => Promise<T>): Promise<T> {
-  if (process.platform !== 'linux' || (await statfs('/dev/shm')).type !== 0x01021994) {
+  if (!await memoryKeyRuntimeAvailable()) {
     throw new AppError('KEY_RUNTIME_UNAVAILABLE', '키를 사용하는 작업에는 메모리 임시 저장소를 갖춘 Linux 러너가 필요합니다.');
   }
   const prefix = 'appops-key-' + createHash('sha256').update(namespace).digest('hex').slice(0, 12) + '-';

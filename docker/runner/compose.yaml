@@ -1,0 +1,37 @@
+name: appops-linux-runner
+services:
+  runner:
+    image: appops-linux-runner:local
+    build:
+      context: ../../tmp/docker-runner-context
+      dockerfile: docker/runner/Dockerfile
+    init: true
+    user: "0:0"
+    read_only: true
+    ports:
+      - "127.0.0.1:4320:4320"
+    environment:
+      APPOPS_RUNNER_HOST: "0.0.0.0"
+      APPOPS_RUNNER_PORT: "4320"
+      APPOPS_RUNNER_DATA_DIR: /data/runner
+      APPOPS_GODOT_DATA_DIR: /data/godot
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN, SETUID, SETGID, SETFCAP]
+    security_opt:
+      - seccomp=./seccomp-bwrap.json
+      - systempaths=unconfined
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
+    shm_size: 128m
+    volumes:
+      - runner-data:/data
+    logging:
+      driver: "none"
+    healthcheck:
+      test: [CMD, node, /app/docker/runner/healthcheck.mjs]
+      interval: 15s
+      timeout: 10s
+      start_period: 30m
+      retries: 3
+volumes:
+  runner-data:

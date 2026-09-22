@@ -1,5 +1,5 @@
 import test from'node:test';import assert from'node:assert/strict';
-import{mkdtemp,mkdir,readFile,rm,stat,symlink,writeFile}from'node:fs/promises';import{join}from'node:path';import{tmpdir}from'node:os';
+import{chmod,mkdtemp,mkdir,readFile,rm,stat,symlink,writeFile}from'node:fs/promises';import{join}from'node:path';import{tmpdir}from'node:os';
 import{packFiles,unpackFiles}from'../packages/remote-runner/index.js';import{startRemoteRunner}from'../apps/runner/remote.js';
 import{runnerEndpoint}from'../apps/controller/operations.js';
 
@@ -22,4 +22,41 @@ test('remote runner requires pairing, rejects browser origins, malformed source 
 test('runner endpoints permit private HTTPS or local tunnels and reject credentials and cleartext remote hosts',()=>{
  assert.equal(runnerEndpoint('https://runner.example/agent/'),'https://runner.example/agent');assert.equal(runnerEndpoint('http://127.0.0.1:4320'),'http://127.0.0.1:4320');
  for(const url of['http://remote.example','https://user:password@example.test','file:///tmp/secret','https://runner.example?token=secret','https://runner.example#x'])assert.throws(()=>runnerEndpoint(url));
+});
+
+test('runner stays on loopback by default and all-interface listening requires an explicit option',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'appops-runner-listen-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ for(const host of [undefined,'127.0.0.1','0.0.0.0']){
+  const runner=await startRemoteRunner({directory:join(root,host??'default'),port:0,host});
+  try{
+   assert.equal(runner.host,host??'127.0.0.1');
+   const token=await readFile(runner.tokenPath,'utf8');assert.ok(token.length>=24);
+   assert.equal((await stat(runner.tokenPath)).mode&0o777,0o600);
+   assert.equal((await fetch(`http://127.0.0.1:${runner.port}/health`)).status,401);
+   // An authenticated unknown path proves reachability without running a host toolchain probe.
+   assert.equal((await fetch(`http://127.0.0.1:${runner.port}/unknown`,{headers:{Authorization:`Bearer ${token}`}})).status,404);
+  }finally{await runner.close();}
+ }
+});
+
+test('runner refuses unsupported listen addresses before creating credentials or directories',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'appops-runner-invalid-host-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ for(const host of ['','localhost','::','::1','192.168.1.20','runner.example','0.0.0.0:4320']){
+  const directory=join(root,'not-created');
+  await assert.rejects(startRemoteRunner({directory,port:0,host}),{code:'INVALID_RUNNER_HOST'});
+  await assert.rejects(stat(directory),{code:'ENOENT'});
+ }
+});
+
+test('runner reuses a private pairing file and refuses exposed or linked files on restart',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'appops-runner-pairing-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+ const first=await startRemoteRunner({directory,port:0});const token=await readFile(first.tokenPath,'utf8');await first.close();
+ const second=await startRemoteRunner({directory,port:0});
+ try{assert.equal(await readFile(second.tokenPath,'utf8'),token);}finally{await second.close();}
+ if(process.platform!=='win32'){
+  await chmod(first.tokenPath,0o644);
+  await assert.rejects(startRemoteRunner({directory,port:0}),{code:'INVALID_RUNNER_AUTH_FILE'});
+ }
+ await rm(first.tokenPath);await writeFile(join(directory,'other'),token,{mode:0o600});await symlink(join(directory,'other'),first.tokenPath);
+ await assert.rejects(startRemoteRunner({directory,port:0}),{code:'INVALID_RUNNER_AUTH_FILE'});
 });

@@ -62,13 +62,29 @@ export function assertAndroidCertificate(certificate: X509Certificate): void {
   if (end <= Date.now()) return fail('서명 인증서가 만료되었습니다.');
   if (end <= Date.parse('2033-10-22T23:59:59.999Z')) return fail('Google Play 배포용 서명 인증서는 2033년 10월 22일 이후까지 유효해야 합니다.');
 }
+/** Shared by the host and Linux helper; normalization never needs a private file. */
+export function normalizeBuildCredential(kind: BuildCredential['kind'], raw: Record<string, string>): Record<string, string> {
+  if (kind === 'ssh') {
+    return { ...validateSshLocation(raw), privateKey: text(raw.privateKey, 'SSH 개인 키', 1_048_576) + '\n',
+      passphrase: password(raw.passphrase, '키 암호', true), knownHosts: text(raw.knownHosts, '고정한 SSH 서버 키', 1_048_576) + '\n' };
+  }
+  const encoded = text(raw.keystoreBase64, 'Android 키스토어', 1_500_000);
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length % 4) return fail('키스토어 파일 인코딩이 올바르지 않습니다.');
+  const bytes = Buffer.from(encoded, 'base64');
+  if (!bytes.length || bytes.length > 1_048_576 || bytes.toString('base64') !== encoded) return fail('키스토어 파일은 1 MiB 이하여야 합니다.');
+  const storePassword = password(raw.storePassword, '키스토어 암호');
+  const keyPassword = password(raw.keyPassword || storePassword, '개인 키 암호');
+  const keyAlias = text(raw.keyAlias, '키 별칭', 100);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(keyAlias)) return fail('키 별칭은 영문·숫자·점·밑줄·하이픈을 사용해 주세요.');
+  return { keystoreBase64: encoded, storePassword, keyPassword, keyAlias };
+}
 export async function validateBuildCredential(kind: BuildCredential['kind'], raw: Record<string, string>, namespace: string): Promise<ValidatedBuildCredential> {
+  if (process.platform === 'darwin') return (await import('./docker.js')).validateDockerBuildCredential(kind, raw);
   return secretWorkspace(namespace, async (directory): Promise<ValidatedBuildCredential> => {
+    const normalized = normalizeBuildCredential(kind, raw);
     if (kind === 'ssh') {
-      const location = validateSshLocation(raw);
-      const privateKey = text(raw.privateKey, 'SSH 개인 키', 1_048_576) + '\n';
-      const passphrase = password(raw.passphrase, '키 암호', true);
-      const knownHosts = text(raw.knownHosts, '고정한 SSH 서버 키', 1_048_576) + '\n';
+      const location = validateSshLocation(normalized);
+      const { privateKey, passphrase, knownHosts } = normalized;
       const keyFile = await privateFile(directory, 'identity', privateKey);
       const hostsFile = await privateFile(directory, 'known_hosts', knownHosts);
       const environment = await sshEnvironment(directory, { passphrase });
@@ -85,15 +101,8 @@ export async function validateBuildCredential(kind: BuildCredential['kind'], raw
       const fingerprint = 'SHA256:' + createHash('sha256').update(Buffer.from(encoded, 'base64')).digest('base64').replace(/=+$/, '');
       return { credentials: { ...location, privateKey, passphrase, knownHosts }, fingerprint, publicKey, details: { ...location, algorithm } };
     }
-    const encoded = text(raw.keystoreBase64, 'Android 키스토어', 1_500_000);
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length % 4) return fail('키스토어 파일 인코딩이 올바르지 않습니다.');
-    const bytes = Buffer.from(encoded, 'base64');
-    if (!bytes.length || bytes.length > 1_048_576 || bytes.toString('base64') !== encoded) return fail('키스토어 파일은 1 MiB 이하여야 합니다.');
-    const storePassword = password(raw.storePassword, '키스토어 암호');
-    const keyPassword = password(raw.keyPassword || storePassword, '개인 키 암호');
-    const keyAlias = text(raw.keyAlias, '키 별칭', 100);
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(keyAlias)) return fail('키 별칭은 영문·숫자·점·밑줄·하이픈을 사용해 주세요.');
-    const file = await privateFile(directory, 'keystore', bytes);
+    const { keystoreBase64: encoded, storePassword, keyPassword, keyAlias } = normalized;
+    const file = await privateFile(directory, 'keystore', Buffer.from(encoded, 'base64'));
     const storePass = await privateFile(directory, 'store-pass', storePassword);
     const keyPass = await privateFile(directory, 'key-pass', keyPassword);
     const keytool = await javaTool('keytool'); const signer = await javaTool('jarsigner');

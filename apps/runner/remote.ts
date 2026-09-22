@@ -10,12 +10,23 @@ import { executeBuild } from './execute.js';
 import { probeIsolation, type IsolationOptions } from './sandbox.js';
 import { targetValue } from '../controller/validation.js';
 
-export interface RemoteRunnerOptions { directory:string;port?:number;token?:string;isolation?:IsolationOptions;execute?:typeof executeBuild;engines?:Partial<Record<import('../../packages/domain/index.js').EngineKind,string>> }
+export interface RemoteRunnerOptions { directory:string;port?:number;host?:string;token?:string;isolation?:IsolationOptions;execute?:typeof executeBuild;engines?:Partial<Record<import('../../packages/domain/index.js').EngineKind,string>> }
 export async function startRemoteRunner(options:RemoteRunnerOptions) {
+  const host=options.host??'127.0.0.1';
+  if(host!=='127.0.0.1'&&host!=='0.0.0.0')throw new AppError('INVALID_RUNNER_HOST','러너 리슨 주소는 127.0.0.1 또는 0.0.0.0이어야 합니다.');
   await mkdir(options.directory,{recursive:true,mode:0o700});
   const tokenPath=join(options.directory,'pairing-code');
   let token=options.token;
-  if(!token){try{token=await readFile(tokenPath,'utf8');}catch{token=randomBytes(32).toString('base64url');await writeFile(tokenPath,token,{mode:0o600,flag:'wx'});}}
+  if(!token){
+    try{
+      const info=await lstat(tokenPath);
+      if(!info.isFile()||info.nlink!==1||(process.platform!=='win32'&&(info.mode&0o777)!==0o600))throw new AppError('INVALID_RUNNER_AUTH_FILE','러너 연결 코드 파일은 링크가 아닌 0600 일반 파일이어야 합니다.');
+      token=await readFile(tokenPath,'utf8');
+    }catch(error){
+      if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+      token=randomBytes(32).toString('base64url');await writeFile(tokenPath,token,{mode:0o600,flag:'wx'});
+    }
+  }
   if(token.length<24)throw new AppError('INVALID_RUNNER_AUTH','러너 연결 코드는 24자 이상이어야 합니다.');
   const expected=Buffer.from(token);let active:AbortController|undefined;
   const server=createServer(async(req,res)=>{
@@ -55,7 +66,7 @@ export async function startRemoteRunner(options:RemoteRunnerOptions) {
     finally{clearTimeout(timeout);if(work)await rm(work,{recursive:true,force:true}).catch(()=>{});active=undefined;}
   });
   server.requestTimeout=60*60_000;
-  await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.port??4320,'127.0.0.1',()=>resolve());});
+  await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.port??4320,host,()=>resolve());});
   const address=server.address();if(!address||typeof address==='string')throw new Error('Runner address unavailable');
-  return {port:address.port,tokenPath,async close(){active?.abort();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
+  return {host:address.address,port:address.port,tokenPath,async close(){active?.abort();server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()));}};
 }

@@ -9,10 +9,36 @@ import { Store } from '../packages/storage/index.js';
 import { CredentialVault, type KeyProvider } from '../packages/credentials/index.js';
 import { BuildKeyManager, validateBuildCredential } from '../packages/build-credentials/index.js';
 import { signAndroidArtifact } from '../packages/build-credentials/build.js';
-import { javaTool, privateFile, runTrustedTool, secretWorkspace } from '../packages/build-credentials/tools.js';
+import { javaTool, memoryKeyRuntimeAvailable, privateFile, runTrustedTool, secretWorkspace } from '../packages/build-credentials/tools.js';
+import { dockerKeyRuntimeAvailable } from '../packages/build-credentials/docker-runtime.js';
 import { DEFAULT_POLICY, type Project } from '../packages/domain/index.js';
 
+const KEY_RUNTIME_SKIP = '이 검사는 Linux 직접 tmpfs 경로를 검증합니다. Mac Docker 경로는 별도 실제 이미지 통합 검사가 담당합니다.';
+
+async function skipWithoutMemoryKeyRuntime(t: { skip: (reason?: string) => void }): Promise<boolean> {
+  if (await memoryKeyRuntimeAvailable()) return false;
+  t.skip(KEY_RUNTIME_SKIP);
+  return true;
+}
+
+test('host private-file workspace fails closed independently of Docker key validation', async t => {
+  if (await memoryKeyRuntimeAvailable()) {
+    t.skip('Linux tmpfs /dev/shm 이 있어 키 작업을 거절하지 않습니다. 양성 검사가 이 런타임을 사용합니다.');
+    return;
+  }
+  await assert.rejects(secretWorkspace('runtime-closed', async () => { throw new Error('메모리 임시 저장소 없이 키 파일을 만들면 안 됩니다.'); }), { code: 'KEY_RUNTIME_UNAVAILABLE' });
+  const directory = await mkdtemp(join(tmpdir(), 'appops-key-closed-'));
+  const store = new Store(directory, { heartbeat: false });
+  let master: Buffer | undefined;
+  const vault = new CredentialVault(join(directory, 'vault'), { keyProvider: { name: 'test-memory', getKey: async () => master, setKey: async key => { master = key; } } });
+  const manager = new BuildKeyManager(store, vault);
+  t.after(async () => { store.close(); await rm(directory, { recursive: true, force: true }); });
+  const code = process.platform === 'darwin' && await dockerKeyRuntimeAvailable() ? 'KEY_TOOL_FAILED' : 'KEY_RUNTIME_UNAVAILABLE';
+  await assert.rejects(manager.save({ kind: 'ssh', label: '닫힌 런타임', credentials: { privateKey: 'not-used', passphrase: 'test-only-ssh-pass', host: '127.0.0.1', knownHosts: '127.0.0.1 ssh-ed25519 AAAA' } }), { code });
+});
+
 test('real SSH import decrypts a passphrase key, pins host, versions vault data, and prevents in-use deletion', async t => {
+  if (await skipWithoutMemoryKeyRuntime(t)) return;
   const directory = await mkdtemp(join(tmpdir(), 'appops-key-lifecycle-')); const store = new Store(directory, { heartbeat: false });
   let master: Buffer | undefined; const keyProvider: KeyProvider = { name: 'test-memory', getKey: async () => master, setKey: async key => { master = key; } };
   const vault = new CredentialVault(join(directory, 'vault'), { keyProvider }); const manager = new BuildKeyManager(store, vault);
@@ -65,6 +91,7 @@ test('real SSH import decrypts a passphrase key, pins host, versions vault data,
 });
 
 test('real Android keystore import proves the private key and signs/verifies an AAB-format JAR', async t => {
+  if (await skipWithoutMemoryKeyRuntime(t)) return;
   const directory = await mkdtemp(join(tmpdir(), 'appops-android-key-')); const store = new Store(directory, { heartbeat: false });
   let master: Buffer | undefined;
   const vault = new CredentialVault(join(directory, 'vault'), { keyProvider: { name: 'test', getKey: async () => master, setKey: async key => { master = key; } } });
@@ -86,7 +113,8 @@ test('real Android keystore import proves the private key and signs/verifies an 
   assert.deepEqual((await readdir(output)).sort(), ['unsigned.aab']);
 });
 
-test('private temporary files are removed on errors and cancellation kills trusted tool work', async () => {
+test('private temporary files are removed on errors and cancellation kills trusted tool work', async t => {
+  if (await skipWithoutMemoryKeyRuntime(t)) return;
   let path = '';
   await assert.rejects(secretWorkspace('cleanup-test', async workspace => { path = workspace; await privateFile(workspace, 'private', 'fake secret'); throw new Error('test failure'); }));
   await assert.rejects(stat(path), { code: 'ENOENT' });
@@ -97,7 +125,8 @@ test('private temporary files are removed on errors and cancellation kills trust
   });
 });
 
-test('Android release keys reject future validity, short expiry and prohibited signing usage', async () => {
+test('Android release keys reject future validity, short expiry and prohibited signing usage', async t => {
+  if (await skipWithoutMemoryKeyRuntime(t)) return;
   await secretWorkspace('android-invalid-certificates', async workspace => {
     const keytool = await javaTool('keytool'); const storePassword = 'generated-test-password';
     const pass = await privateFile(workspace, 'password', storePassword);

@@ -9,10 +9,15 @@ const { Server, utils } = ssh2;
 import { Store } from '../packages/storage/index.js';
 import { CredentialVault } from '../packages/credentials/index.js';
 import { BuildKeyManager } from '../packages/build-credentials/index.js';
+import { memoryKeyRuntimeAvailable } from '../packages/build-credentials/tools.js';
 import { prepareSshDependencies } from '../packages/build-credentials/build.js';
 import { DEFAULT_POLICY, type Project } from '../packages/domain/index.js';
 
 test('isolated Git fetch authenticates to a real loopback SSH server, verifies host, and copies only snapshot inputs', async t => {
+  if (!await memoryKeyRuntimeAvailable()) {
+    t.skip('격리된 Git fetch는 Linux tmpfs(/dev/shm)의 개인키 작업이 필요합니다. 키 거절은 private key fail-closed 검사가 담당합니다.');
+    return;
+  }
   const root = await mkdtemp(join(tmpdir(), 'appops-ssh-fetch-')); const repository = join(root, 'repo'); await mkdir(repository);
   const git = (args: string[]) => execFileSync('/usr/bin/git', args, { cwd: repository, env: { PATH: '/usr/bin:/bin', HOME: root, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }, stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
   git(['init', '-b', 'main']); await writeFile(join(repository, 'dependency.txt'), 'actual private dependency'); await writeFile(join(repository, '.env'), 'DO_NOT_COPY=secret');

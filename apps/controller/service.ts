@@ -840,6 +840,7 @@ export class AppService {
       if (target === 'android' && selection.android) {
         execution.progress('등록된 Android 키로 빌드 결과물을 서명하고 인증서를 확인합니다.');
         signatures.push(await signAndroidArtifact(this.buildKeys, selection.android, destination, this.store.directory, execution.signal));
+        execution.checkpoint({ signatures: [...signatures] });
       }
       artifacts.push(await attestArtifact(destination, outputPath));
     }

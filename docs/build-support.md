@@ -1,6 +1,6 @@
 # 빌드 지원표
 
-Last Updated: 2026-09-11
+Last Updated: 2026-09-22
 
 이 표는 엔진 검수·빌드 plan·러너 구현을 기준으로 한다. **실측**은 이 저장소에서 실제 파일·프로세스로 확인한 동작이다. **미검증**은 공식 CLI 문서에 맞춰 명령을 구성했으나 해당 엔진/SDK/호스트가 이 환경에 없어 실제 결과물·서명을 확인하지 못한 항목이다. 미검증을 지원 완료로 읽지 않는다.
 
@@ -18,7 +18,7 @@ Last Updated: 2026-09-11
 
 ## 실측 (이 환경에서 확인)
 
-초기 호스트: Linux, Node.js 22. 초기 도구 탐지 검사는 최소 프로젝트 파일·모의 실행 파일을 사용했다. 이후 공식 Godot 4.3 편집기와 템플릿을 전용 폴더에 준비해 아래 실제 내보내기 및 controller E2E를 검증했다. Unity/Unreal/Xcode/Android SDK 실제 실행은 미검증이다.
+초기 호스트: Linux, Node.js 22. 초기 도구 탐지 검사는 최소 프로젝트 파일·모의 실행 파일을 사용했다. 이후 공식 Godot 4.3 편집기와 템플릿을 전용 폴더에 준비해 아래 실제 내보내기 및 controller E2E를 검증했다. 2026-09-22에는 macOS arm64 제어 서비스에서 Docker Linux arm64 러너로 빌드하고 결과물을 회수하는 경로도 검증했다. Unity/Unreal/Xcode/Android SDK를 사용하는 실제 앱 빌드는 미검증이다.
 
 | 항목 | 결과 | 근거 |
 |---|---|---|
@@ -47,24 +47,28 @@ Last Updated: 2026-09-11
 | 빈 명령 plan | 통과 | 명령 0개면 실패 |
 | Godot/Unity/Unreal/Gradle plan 형식 | 통과 | 공식 인수 배열 생성. 없는 프리셋/빌드 프로파일은 명령을 만들지 않음 |
 | `scanToolchains` | 통과 | 미설치 도구는 `available: false` + 이유. Linux에서 xcodebuild 불가 |
+| Linux 네이티브 bwrap Godot 4.3 export | 통과 | 기존 Linux 실행 경로 유지. 아래 2026-09-11 실측 |
+| Mac arm64 → Docker Linux arm64 Godot 4.3 export | 통과 | 인증 HTTP 전송·bwrap export·Mac 결과물 회수. 아래 2026-09-22 실측 |
+| Mac으로 회수한 Linux 게임의 실행 | 통과 | 같은 결과물의 복사본을 Linux bwrap에서 실행, exit 0·`AppOps controller build OK` |
 
 ## 미검증 (실제 엔진·장비 필요)
 
 | 조합 | 구성한 명령 | 미검증 이유 |
 |---|---|---|
-| Godot 4.3 **Linux** 실제 내보내기 | `godot --headless --path <snapshot> --export-release Linux <output>` | **검증 완료** — 아래 "실제 Godot Linux 전체 내보내기 실측" 참조 |
 | Godot 4.x Android/iOS/Windows/macOS 실제 내보내기 | `godot --headless --path <project> --export-release <preset> <output>` | Linux 외 타깃 템플릿·서명·호스트 미검증 |
 | Unity 데스크톱 실제 플레이어 | `-batchmode -nographics -quit -projectPath -buildLinux64Player` 등 | Unity Editor 없음. 라이선스·모듈 미확인 |
 | Unity Android/iOS | `-activeBuildProfile` + `-build` (전용 `-build*Player` 없음) | 빌드 프로파일 샘플과 Editor 없음 |
 | Unreal BuildCookRun | `RunUAT.sh BuildCookRun -build -cook -stage -package -archive` | Unreal Engine / UAT / 플랫폼 SDK 없음 |
 | 네이티브 Android AAB/APK | `gradlew app:bundleRelease` 또는 debug `assembleDebug` | JDK·Android SDK·실제 앱 모듈 빌드 없음 |
-| iOS archive/IPA | `xcodebuild archive` 후 `-exportArchive` | Linux 호스트. Mac·Xcode·서명·ExportOptions.plist 실사용 없음 |
+| iOS archive/IPA | `xcodebuild archive` 후 `-exportArchive` | Mac 네이티브 Xcode·서명·ExportOptions.plist 빌드 미검증. Linux Docker 경로의 지원 대상에 포함되지 않음 |
 | 서명된 스토어 결과물 | Play AAB, App Store IPA, Steam 데스크톱 바이너리 | 서명 비밀·스토어 업로드는 이 범위 밖 |
-| Windows/macOS 호스트 경로 | Unity Hub·Xcode 기본 설치 경로 탐색 코드만 존재 | 해당 OS에서 실행하지 않음 |
+| Windows/macOS 네이티브 러너 | Unity Hub·Xcode 기본 설치 경로 탐색 및 격리 확장점 | 네이티브 격리·엔진 빌드 미검증. Mac의 Docker Linux 경로는 위 별도 실측 |
 
 ## 샌드박스 도구 준비 (1회 APPOPS_* 설정)
 
 샌드박스는 네트워크가 없고 HOME이 비어 있어 표준 Gradle Wrapper 다운로드나 Godot 템플릿 자동 설치가 불가능하다. 아래 도구/캐시를 **홈 밖 전용 디렉터리**에 1회 준비하고 환경 변수로 지정한다. 이 `APPOPS_*` 변수 자체는 샌드박스에 전달되지 않고, 검증된 경로만 read-only로 mount된다. 준비되지 않으면 plan이 명령을 만들지 않고 actionable finding을 남긴다(fail closed).
+
+Docker Linux 러너는 Godot 편집기를 이미지 빌드 때 준비하고, 템플릿은 첫 기동 때 named volume으로 내려받은 뒤 bwrap 빌드를 시작한다. 최초 템플릿 다운로드는 약 1 GiB이며 매 기동 archive 해시를 재검증한다. 별도 Docker 환경과 준비 절차는 [원격 러너 문서](runner-protocol.md#docker-linux-러너-준비와-연결)를 따른다. 기존 Linux 네이티브 러너는 아래 설정을 그대로 사용한다.
 
 | 환경 변수 | 가리킬 대상 | 검증 조건 |
 |---|---|---|
@@ -84,7 +88,7 @@ Last Updated: 2026-09-11
 - 실행은 `shell: false`와 인수 배열만 사용한다.
 - Linux에서는 bubblewrap(`/usr/bin/bwrap`)으로 실행한다. 스냅샷·출력·검증된 도구 경로만 bind하고, `--clearenv` 후 최소 환경, `--unshare-net`으로 네트워크 차단, `--unshare-pid`+`--proc`으로 pid 격리, 사용자 홈(특히 `~/.gradle`·`~/.ssh` 같은 dotfile 트리)·controller 데이터·DBus는 mount하지 않는다. `APPOPS_*` 변수는 샌드박스에 넣지 않는다.
 - 격리 백엔드를 초기화할 수 없으면 일반 실행으로 폴백하지 않고 실패한다 (fail closed).
-- Windows/macOS는 이 환경에서 검증된 격리 러너가 없어 빌드 실행을 지원하지 않는다고 표시한다.
+- Windows/macOS 네이티브 실행은 검증된 내장 격리 러너가 없어 준비 완료로 표시하지 않는다. macOS에서 추가 Docker 환경을 사용한 Linux 러너의 Godot Linux 빌드는 아래와 같이 검증했다.
 - 취소 시 프로세스 그룹에 SIGTERM 후 유예 시간 뒤 SIGKILL.
 - 표준 출력/에러는 스트림당 1,048,576바이트에서 자른다.
 - **결과물 출처 보증**: 매 빌드 시도 시작에 출력 디렉터리와 기대 결과물 경로(스냅샷 안 포함)를 제거해 이전 시도의 산출물이 재인증되지 않게 한다. 제거는 스냅샷/출력 루트 안의 검증된 경로만 대상으로 하며 호스트 경로는 건드리지 않는다.
@@ -100,7 +104,7 @@ Last Updated: 2026-09-11
 | 네임스페이스 초기화 `--unshare-user-try --unshare-pid --unshare-net` + `/bin/true` | 성공 |
 | 스냅샷 bind + 호스트 홈/`/etc/passwd` 숨김 | 성공. 샌드박스에서 홈 파일 읽기 차단 |
 | 격리 불가 시 폴백 금지 | 성공. `forceUnavailable` 이면 명령 미실행·exit 1 |
-| Windows/macOS 격리 러너 | 미검증·미지원 (이 호스트는 Linux) |
+| Windows/macOS 네이티브 격리 러너 | 당시 미검증·미지원. 아래 Mac Docker 검증도 Linux bwrap를 사용함 |
 
 ## 실제 Godot Linux 전체 내보내기 실측 (2026-09-11, Linux) — 통과
 
@@ -138,11 +142,28 @@ env: XDG_DATA_HOME=<output>/.appops-task-cache/xdg-data  GODOT_TEMPLATES_SOURCE=
 
 보존: 검증용 도구/프로젝트/출력은 root 컨트롤러 스모크를 위해 `/tmp/appops-godot-verification-20260911/`에 **삭제하지 않고 보존**했다(편집기 `downloads/`, 템플릿 `godot-data/`, 최소 프로젝트 `project/`, 스냅샷 `snapshot/`, 산출물 `output/`, 드라이버 `verify.mjs`/`launch.mjs`).
 
+## Mac Docker Linux Godot 실측 (2026-09-22)
+
+**macOS arm64 제어 서비스 → 인증 HTTP `127.0.0.1:4320` → Docker Linux arm64 러너 → bwrap Godot 4.3 export → Mac 결과물 회수**를 실제 파일·프로세스로 검증했다. 실행 ID는 `08ccec33-4f13-4218-9be7-486a380dcc64`, 결과는 `succeeded`다. 이 경로에서 생성한 실행 파일의 대상은 Linux arm64다.
+
+| 회수 결과물 | 크기 | SHA-256 |
+|---|---:|---|
+| `Controller Verify` | 59,761,504 bytes | `1cb22de64c05d29ae9c24e92899b88fb63818c24ec077338a2666de19f5e2cf3` |
+| `Controller Verify.pck` | 1,840 bytes | `b4b105d8661967b6394e34fec8965f4bb5f42bfff15767a6aa62ae6ae70eb55b` |
+
+회수한 동일 결과물의 검증용 복사본을 Linux 컨테이너의 bwrap 안에서 실행했다. 복사본 소유권만 root로 조정하고 바이트와 실행 비트를 보존했으며, Godot `4.3.stable.official.77dcf97d8`이 `AppOps controller build OK`를 출력하고 exit 0으로 종료했다. 이는 생성한 Linux 게임의 실행 근거이며 Mac 네이티브 실행을 의미하지 않는다.
+
+실제 Compose 환경에서 호스트 공개 포트 `127.0.0.1:4320`, 인증 없는 `/health`의 401, 인증된 `/health`의 200 및 bwrap `ready:true`, 연결 코드 파일 0600과 로그 미출력도 확인했다. 컨테이너 내부만 `0.0.0.0`을 리슨하며, `init`·검토된 capability 4개·제한 seccomp·systempaths 설정으로 기존 Linux bwrap를 실행한다. 준비·페어링·새 컨텍스트를 사용하는 재빌드 명령은 [원격 러너 문서](runner-protocol.md#docker-linux-러너-준비와-연결)에 있다.
+
+근거는 로컬 실측 로그 [Mac→Docker 빌드·회수](../tmp/cross-platform-linux-20260922/mac-to-docker-godot.log), [회수 게임의 Linux 실행](../tmp/cross-platform-linux-20260922/mac-docker-game-execution.log)다. `tmp/`는 Git에서 제외되므로 위 실행 ID·크기·해시를 이 문서에도 기록했다. 재현 스크립트는 `scripts/verify-remote-godot.ts`이며 외부 러너 URL·연결 코드 파일 경로를 받아 실행할 수 있다.
+
+이 전용 이미지는 공식 고정 해시의 Godot 4.3 Linux 편집기와 해당 아키텍처의 Linux 템플릿을 준비한다. JDK17·git·SSH 클라이언트도 포함하지만 Android SDK·Unity·Unreal·Xcode는 포함하지 않는다. 현재 Mac Docker 실측은 arm64이며 Mac x86_64 또는 별도 Linux 호스트의 Docker 구성까지 실제 실행을 확인한 것으로 확대하지 않는다. Linux 네이티브 bwrap의 기존 실측은 유지한다.
+
 ## 후속 실측이 필요한 환경
 
 Godot 나머지 타깃(Android/iOS/Windows/macOS)과 Unity·Unreal·네이티브 Android(JDK+SDK)·Xcode의 실제 결과물 산출은 여전히 미검증이다. Android 키스토어 등록·별도 서명·JAR 형식 AAB의 실제 서명 검사는 [빌드 키 관리](build-credentials.md)처럼 구현·검증했다. 설치 가능한 Android 앱·APK SDK 도구, iOS 서명·프로파일(macOS 전용), Unity/Unreal 라이선스 환경은 아직 미검증이다. Godot Linux 경로는 위 실측으로 완료로 이동한다.
 
-최신 제어 서비스 E2E는 소스 등록부터 스냅샷·격리 빌드·산출물 증명·이력까지 통과했다. 실행 ID `365f75c7-71c0-4a29-9550-0de33c8cd1bc`, 실행 파일 66,074,584 bytes와 PCK 1,840 bytes. [실제 결과 기록](verification-assets/godot-controller-20260911.json)과 [검증 명령](verification.md)을 참고한다.
+2026-09-11 Linux 제어 서비스 E2E는 소스 등록부터 스냅샷·격리 빌드·산출물 증명·이력까지 통과했다. 실행 ID `365f75c7-71c0-4a29-9550-0de33c8cd1bc`, 실행 파일 66,074,584 bytes와 PCK 1,840 bytes. [당시 결과 기록](verification-assets/godot-controller-20260911.json)과 [검증 명령](verification.md)을 참고한다. Mac→Docker의 최신 결과는 위 2026-09-22 실측에 기록했다.
 
 ## v3 원격 러너와 데모 검증
 

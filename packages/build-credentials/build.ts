@@ -7,8 +7,9 @@ import type { BuildKeyManager, BuildKeyReference, BuildSecuritySelection } from 
 import { assertAndroidCertificate } from './index.js';
 import { javaTool, privateFile, runTrustedTool, secretWorkspace, sshEnvironment } from './tools.js';
 
-export async function prepareSshDependencies(manager: BuildKeyManager, selection: BuildSecuritySelection, snapshot: string,
+export async function prepareSshDependencies(manager: Pick<BuildKeyManager, 'credentials'>, selection: BuildSecuritySelection, snapshot: string,
   workDirectory: string, namespace: string, signal: AbortSignal): Promise<{ path: string; commit: string; hash: string; key: BuildKeyReference }[]> {
+  if (process.platform === 'darwin' && selection.sshDependencies.length) return (await import('./docker.js')).prepareDockerSshDependencies(manager, selection, snapshot, signal);
   const records: { path: string; commit: string; hash: string; key: BuildKeyReference }[] = [];
   for (const [index, dependency] of selection.sshDependencies.entries()) {
     signal.throwIfAborted();
@@ -60,12 +61,13 @@ async function androidBuildTools(): Promise<string> {
   }
   throw new AppError('SIGNING_TOOL_REQUIRED', 'APK 서명에는 Android SDK build-tools의 zipalign과 apksigner가 필요합니다. Android SDK 경로를 설정해 주세요.');
 }
-export async function signAndroidArtifact(manager: BuildKeyManager, reference: BuildKeyReference, artifact: string,
+export async function signAndroidArtifact(manager: Pick<BuildKeyManager, 'credentials'>, reference: BuildKeyReference, artifact: string,
   namespace: string, signal: AbortSignal): Promise<{ fingerprint: string; keyId: string; version: number; format: string }> {
+  if (process.platform === 'darwin') return (await import('./docker.js')).signDockerAndroidArtifact(manager, reference, artifact, signal);
   const format = extname(artifact).toLowerCase();
   if (!['.aab', '.apk'].includes(format)) throw new AppError('SIGNING_FORMAT_UNSUPPORTED', 'Android 키로 서명할 AAB/APK 결과물이 필요합니다.');
   const info = await lstat(artifact);
-  if (!info.isFile() || info.isSymbolicLink()) throw new AppError('ARTIFACT_ESCAPE', '서명할 결과물은 일반 파일이어야 합니다.');
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new AppError('ARTIFACT_ESCAPE', '서명할 결과물은 일반 파일이어야 합니다.');
   const credentials = await manager.credentials(reference);
   const signed = artifact + '.signed'; const aligned = artifact + '.aligned';
   await rm(signed, { force: true }); await rm(aligned, { force: true });

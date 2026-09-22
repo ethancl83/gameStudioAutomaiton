@@ -12,6 +12,7 @@ import { AppService, type ServiceOptions } from './service.js';
 import { normalizeError } from './validation.js';
 import { DemoService } from './demo.js';
 import { activatePendingRestore } from '../../packages/backup/activation.js';
+import { dockerKeyCleanupFailure } from '../../packages/build-credentials/cleanup.js';
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
   const maximum = /^\/api\/(?:demo\/)?media$/.test(request.url ?? '') ? 22 * 1024 * 1024 : 2 * 1024 * 1024;
@@ -94,6 +95,7 @@ export async function startController(options: ControllerOptions = {}): Promise<
   const server = createServer(async (request, response) => {
     let inDemo = false;
     let leaveMutation: (() => void) | undefined;
+    let errorStore: Store | undefined;
     try {
       if (![ `127.0.0.1:${port}`, `localhost:${port}` ].includes(request.headers.host ?? '')) throw new AppError('INVALID_HOST', '허용되지 않은 요청 주소입니다.', 403);
       // Validate the wire path before WHATWG URL parsing can remove dot segments
@@ -133,6 +135,7 @@ export async function startController(options: ControllerOptions = {}): Promise<
       }
       const activeService = inDemo ? await getDemo() : service;
       const activeStore = activeService.store;
+      errorStore = activeStore;
       const path = inDemo ? '/api' + url.pathname.slice('/api/demo'.length) : url.pathname;
       const method = request.method;
       if (['POST', 'PUT', 'DELETE'].includes(method ?? '')) leaveMutation = activeService.enterMutation();
@@ -278,8 +281,14 @@ export async function startController(options: ControllerOptions = {}): Promise<
       send(response, 200, { ok: true, data });
     } catch (error) {
       const normalized = normalizeError(error);
+      const cleanup = dockerKeyCleanupFailure(error);
+      if (cleanup && errorStore) {
+        try { errorStore.addEvent({ kind: 'operations.error', level: 'error', message: cleanup.message,
+          data: { failureCode: cleanup.code, ...cleanup.details } }); }
+        catch { cleanup.message += ' 복구 정보를 이력에 저장하지 못했으므로 이 메시지를 보관해 주세요.'; }
+      }
       if (response.headersSent) response.destroy();
-      else send(response, normalized.status, { ok: false, error: { code: normalized.code, message: normalized.message } });
+      else send(response, normalized.status, { ok: false, error: cleanup ?? { code: normalized.code, message: normalized.message } });
     } finally { leaveMutation?.(); if (inDemo) demoRequests--; }
   });
   server.requestTimeout = 130_000; server.headersTimeout = 15_000; server.keepAliveTimeout = 5_000;
