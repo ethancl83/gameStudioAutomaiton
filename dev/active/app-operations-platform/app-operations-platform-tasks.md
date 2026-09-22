@@ -1,10 +1,10 @@
 # 앱 출시·마케팅·수익화 통합 자동화 작업 목록
 
-Last Updated: 2026-09-13
+Last Updated: 2026-09-22
 
 프로젝트명: `gameStudioAutomaiton`. 2026-09-12 사용자 지시로 앱 표시명·패키지 이름을 통일하고 `sphacker83/gameStudioAutomaiton` 비공개 저장소로 관리한다. 이름 변경 타입 검사·컴파일·패키징 메타데이터 검증 통과. 기존 개발계획 파일명은 참조 이력으로 보존한다.
 
-유효 기준선: [개발계획 v7](app-operations-platform-plan-v7.md), [v6](app-operations-platform-plan-v6.md), [v5](app-operations-platform-plan-v5.md), [v4](app-operations-platform-plan-v4.md), [v3](app-operations-platform-plan-v3.md), [v2](app-operations-platform-plan-v2.md), [승계한 v1](app-operations-platform-plan.md). 진행 맥락: [작업 맥락](app-operations-platform-context.md). 15개 Phase, 61개 작업이며 문서 3개·v3 통합 5개·실사용 후속 수정 6개·AI 요청 5개, 총 19개를 완료했다. 나머지 42개는 실서비스·OS·장기 수용 조건까지 포함하며 코드 구현률을 뜻하지 않는다.
+유효 기준선: [개발계획 v9](app-operations-platform-plan-v9.md), [v8](app-operations-platform-plan-v8.md), [v7](app-operations-platform-plan-v7.md), [v6](app-operations-platform-plan-v6.md), [v5](app-operations-platform-plan-v5.md), [v4](app-operations-platform-plan-v4.md), [v3](app-operations-platform-plan-v3.md), [v2](app-operations-platform-plan-v2.md), [승계한 v1](app-operations-platform-plan.md). 진행 맥락: [작업 맥락](app-operations-platform-context.md). 15개 Phase, 61개 작업이며 문서 3개·v3 통합 5개·실사용 후속 수정 6개·AI 요청 5개, 총 19개를 완료했다. 나머지 42개는 실서비스·OS·장기 수용 조건까지 포함하며 코드 구현률을 뜻하지 않는다.
 
 Phase 1의 문서 고정 뒤 사용자 지시로 구현을 진행 중이다. 체크 표시는 해당 작업의 전체 산출물·검증 계약이 완료됐다는 뜻이며 코드 생성만으로 체크하지 않는다. 구현 중 경로는 [구현 계약](../../../docs/implementation-contract.md)과 context의 체크포인트를 따른다. 각 작업의 완료 조건은 해당 Phase의 Acceptance Criteria와 V-* 검증 계약을 함께 적용한다. 최근 검증은 [검증 기록](../../../docs/verification.md), [이력·복구 계약](../../../docs/workflow-contract.md), [운영 정책](../../../docs/automation-policies.md), [지표 정의](../../../docs/metric-definitions.md)에 기록한다.
 
@@ -331,16 +331,22 @@ Phase 1의 문서 고정 뒤 사용자 지시로 구현을 진행 중이다. 체
 - [ ] T-13.2 엔진·SDK 설치·영속 설정·실패 복구·라이선스 단계
 - [ ] T-13.3 macOS/Windows 빌드 격리·취소·플랫폼 서명
 - [ ] T-13.4 광고·결제 SDK 적용·게임 이벤트 연결·검증·되돌리기
-- [ ] T-13.5 네이티브 기동·백그라운드 제어 서비스·자동 시작·업데이트
+- [ ] T-13.5 네이티브 기동·앱 종료 정리·자동 시작·업데이트
 - [ ] T-13.6 전체 데이터·암호화 자격 증명 백업/이전·무결성·복구
 - [ ] T-13.7 스토어 미디어·앱 매핑·광고/수익 운영 준비 보완
 - [ ] T-13.8 실제 도구·화면·패키지·독립 리뷰·준비 수용 검사
 
+2026-09-22 후속 완료: 승인된 Docker 환경으로 Mac→Linux Godot 빌드·회수·게임 실행, Mac SSH/Android 키 등록·AAB/JAR 서명·SSH fetch와 공식 SDK의 양 OS 실행을 확인했다. 최신 지정 `gpt-6-astra ultra fast` 워커로 구현·독립 리뷰를 진행했고 지적된 daemon 고정과 큐/API 취소·정리/commit 기록을 보완했다. 최종 500개 검사 Mac 485 통과/15 skip, Linux 491 통과/9 skip, 실패 0·양 OS 타입·빌드 통과. 최종 이미지 키/실패/취소/복구 26/26, 생성 워커·검증 컨테이너 정리 완료. [검증](../../../docs/verification.md#2026-09-22-macos-dockerlinux-실행과-sdk-이식성). Windows·Xcode·라이선스 엔진·새 패키지 UI·실계정·장기 수용은 남아 T-13.3/8 전체 체크는 유지한다.
+
+2026-09-22 체크포인트 완료: Grok 워커로 macOS 기존 36개 실패를 재현해 경로/테스트 전제 26개를 수정하고 실제 도구 부재 10개를 명시적 skip으로 분리했다. 통합 468개 중 452 통과·실패 0·16 skip, 타입·빌드 통과. 설치 CLI 도움말과 실제 stdio MCP 기본 진단을 추가했으며 실 LLM 성공과 구분한다. 별도 Grok 최종 리뷰에서 필수 결함 없음. [검증](../../../docs/verification.md#2026-09-22-macos-검사-안정화climcp-진단). 실계정·타 OS·장기 수용 조건이 남아 T-13.8 전체 완료로 표시하지 않는다.
+
+2026-09-13 종료 후속 완료: 마지막 창 닫기·앱 종료 시 제어 서비스/AI/작업을 정리하고 기동 중 종료도 기다린다. macOS Electron 종료 3개 시나리오·관련 75개·타입·빌드를 확인했다. 자동 시작/업데이트와 다른 OS 수용 조건은 남아 T-13.5 전체 체크는 유지한다. [검증](../../../docs/verification.md#2026-09-13-앱-종료-시-프로세스-정리).
+
 ### T-13.1~8 참조 블록
 
-- 작업 전 필독: [v4](app-operations-platform-plan-v4.md), [맥락](app-operations-platform-context.md), [현재 지원 범위](../../../docs/integration-capabilities.md).
+- 작업 전 필독: [v9 종료 계약](app-operations-platform-plan-v9.md), [v4](app-operations-platform-plan-v4.md), [맥락](app-operations-platform-context.md), [현재 지원 범위](../../../docs/integration-capabilities.md).
 - 원본 코드 참조: `packages/setup/`, `packages/engines/`, `packages/project-integration/`, `packages/lifecycle/`, `apps/controller/`, `apps/desktop/`.
-- 구현 대상: 프로젝트별 준비 근거·설치/연결·SDK 변경 저널·OS 격리·상시 실행·전체 백업과 같은 API를 사용하는 데모/실제 화면.
+- 구현 대상: 프로젝트별 준비 근거·설치/연결·SDK 변경 저널·OS 격리·앱 종료 시 작업 정리·전체 백업과 같은 API를 사용하는 데모/실제 화면.
 - 검증 참조: 설치 무결성/경로·취소·재시작, 프로젝트별 누락 진단, SDK 충돌/롤백, 비밀/호스트 접근 차단, 백업 무결성/외부 작업 재실행 방지, 실제 브라우저·Linux 도구·패키지. Mac/Windows·실계정 미실행은 구별한다.
 - 문서 반영: 새 기능별 문서와 `docs/verification.md`, 이 작업 목록·맥락·카탈로그에 실제 증거를 반영한다. 기존 계획과 v3 검증 이력은 보존한다.
 

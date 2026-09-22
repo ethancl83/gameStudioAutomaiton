@@ -1,21 +1,32 @@
 # 앱 운영 자동화 작업 맥락
 
-Last Updated: 2026-09-13
+Last Updated: 2026-09-22
 
 ## Current Execution Contract
 
-- 유효 계획: [v8](app-operations-platform-plan-v8.md) → [tasks](app-operations-platform-tasks.md) → 이 context. v1–v7은 이력으로 보존한다.
+- 최신 체크포인트 완료(2026-09-22): Mac→Docker Linux Godot 빌드·Mac 결과물 회수·Linux 격리 게임 실행과 Mac SSH/Android 키 등록·AAB/JAR 서명·SSH fetch를 실측했다. 최종 소스 500개 검사에서 Mac 485 통과/15 skip, Linux 491 통과/9 skip, 양쪽 실패 0·타입·빌드 통과. 최종 이미지의 실제 키·daemon·큐/API 통합 26/26 통과. 이미지 context 53파일이 현재 소스와 일치한다. [근거와 사용법](../../../docs/verification.md#2026-09-22-macos-dockerlinux-실행과-sdk-이식성).
+- 독립 리뷰 해소: SDK `ctx_dbcce36ce12a`의 명시 SDK 루트 누락 skip 결함은 회귀 14/14. Docker A/B `ctx_099fae02d0a1`의 daemon 전환 정리 오인과 큐/API 정리·commit 기록 소실 2건은 daemon pin 회귀 3/3, 소비자 31/31·취소 영향 52/52 및 최종 통합 26/26으로 해소했다. 기존 외부 쓰기 취소 fencing은 유지하고 실행 중 build만 정리를 기다린다. 제한된 GUI PATH의 실제 SSH 양성·암호 음성도 통과. 생성한 Grok/Astra 워커 터미널은 모두 정확히 종료하고 release/ack했다. 커밋·푸시·실서비스 변경은 하지 않았다.
+- 2026-09-22 워커 지정 변경 이력: 사용자가 `gpt astra ultra fast`를 명시했다. 진행 중 Grok 터미널 3개는 fence 후 정확한 터미널 종료(`ptyKilled`)와 release를 확인했고 Docker 설계와 완료 SDK 코드를 인계했다. 새 Codex CLI의 실제 실행 화면에서 `gpt-6-astra ultra fast`를 확인했다. 같은 Run의 독립 설계 검토 `task_d6c7baa905ac / ctx_1d41950a44ea`, Docker 구성 `task_22350a24a5ed`, 키 helper `task_1057e284f74c`를 새 지정으로 완료했다. 아래 Grok 기록은 이전 단계 이력이다.
+- 2026-09-22 후속 범위: 사용자가 macOS와 Linux 모두 실제 동작하도록 구현을 요청했다. 이전 skip 분류만으로 완료하지 않는다. 기존 v9 종료/v8 AI UX는 유지하며 Linux 전용 빌드/키 격리의 macOS Docker 지원과 공식 SDK 검증 도구의 호스트 이식성을 구현한다. Run `run_56e46ef2061d`, 현재 워커 지정은 `gpt-6-astra ultra fast`; 초기 Grok 보안 검토 `ctx_6515fdc67baa`·SDK 구현 `ctx_528fd598e42f`는 이력이다. root는 Linux 실행 환경·통합·문서를 담당한다. 새 계획 파일은 만들지 않고 이 실행 계약을 현재 요청의 기준으로 삼는다.
+- 현재 완료 조건: 두 OS의 실제 파일·프로세스로 격리/키/SSH/SDK 경로를 확인하고 회귀·타입·빌드·독립 리뷰를 마친다. 보안 미지원 경로의 무격리 실행, 일반 디스크 평문 키 fallback, 관리자 권한/호스트 보안 설정 변경, 실계정 게시·배포·커밋·푸시는 하지 않는다. 기존 dirty 변경은 모두 보존한다.
+- Linux 검증 준비 이력: Docker Linux aarch64의 전용 컨테이너에서 bwrap/JDK17/SSH를 실행했다. 중첩 격리에는 `SYS_ADMIN`, 기본 seccomp에 `pivot_root`만 추가한 프로필과 전용 컨테이너의 systempaths 해제가 필요했다. 기존 컨테이너/호스트 설정은 변경하지 않았다. 초기 키·러너·SSH 20 통과/0 실패/반대 조건 skip 1. 전체 기준선의 fixtures 누락·init 없는 zombie 회수 문제 4건은 `--init` 컨테이너에서 관련 35개 통과로 해결했다. 최종 Linux 491/500 통과와 타입·빌드를 완료했으며 이번에 생성한 준비/검증 컨테이너 3개와 검증용 Compose 컨테이너·네트워크·volume·연결 코드만 정리했다. 제품 이미지 `appops-linux-runner:local`, 공개 SDK 도구와 증거 로그는 남긴다.
+- macOS 사전 검토 결과: native sandbox의 홈·네트워크 차단과 사용자 권한 RAM 디스크 생성/마운트/600 파일/정리를 실측했으나, setsid 자식은 그룹 취소를 벗어났고 좁은 파일 읽기 프로필은 실행 전 SIGABRT였다. 광범위한 파일 읽기 허용은 수용하지 않았다. 사용자가 Docker 등 추가 실행 환경을 명시 승인해 native RAM 제품 구현은 중단하고 기존 Linux bwrap/tmpfs 실행의 재사용으로 전환한다. Mac 기본 격리 guard는 유지한다. Docker 원격 러너 구성은 `ctx_bf2729fae3b9`, stdin 기반 키 helper는 `ctx_9622bc73df96`, 컨테이너 경계 사전 독립 검토는 `ctx_c02b32ab9ac1`이 담당한다. iOS/Xcode와 라이선스 엔진 전체 지원을 Linux Docker 지원과 혼동하지 않는다.
+- 공식 SDK 후속 완료: 고정 해시 Unity IAP/MAX/Billing/Godot 준비 스크립트, Linux ARM64 Godot variant, AppleDouble 경로·크기 한도, portable tar fixture, 빈 환경값 거부와 acknowledgePurchase 단언을 추가했다. Mac SDK 집중 5/5, Linux SDK·다운로드 26 통과/0 실패/Android ARM64 미지원 skip 1. 독립 리뷰의 명시 경로 누락 결함 수정과 최종 양 OS 회귀도 완료했다.
+- 2026-09-22 현재 체크포인트 완료: 핵심 잔여 요청의 macOS 검사 안정화(T-13.8)·CLI/MCP 기본 진단 구현·통합 검증·별도 Grok 최종 리뷰를 마쳤다. 필수 결함 없음. 기존 v8 요청 UX·v9 종료 계약과 미커밋 종료/UI 변경을 보존했다. 사용자 지정 Grok CLI `grok-4.7 / high` 구현 워커 2개, 별도 리뷰 세션 1개와 root 통합으로 진행했다. Orca Run `run_37ab7b1b2873`; 구현 Dispatch `ctx_e0063e7f640c` / `ctx_d5b08fbf2609`, 최종 리뷰 `ctx_e1a5d8e93903`. 실서비스 쓰기·커밋·푸시와 2차 성장 운영 구현은 범위 밖이다.
+- 검증: 기준선 455개(413 통과·36 실패·6 skip) → 최신 통합 468개(452 통과·실패 0·16 skip), 타입·빌드 통과. 26개 실패는 경로/테스트 전제 수정, 10개는 실행 불가능한 실제 도구 검사로 구분했다. CLI 도움말·실제 MCP 프로세스 경계는 통과했으나 로그인/모델 응답은 검증하지 않았다. [근거](../../../docs/verification.md#2026-09-22-macos-검사-안정화climcp-진단). 로그는 `tmp/core-stability-20260922/`, `tmp/agent-cli-20260922/`다.
+- 유효 계획: [v9](app-operations-platform-plan-v9.md) → [tasks](app-operations-platform-tasks.md) → 이 context. v1–v8은 이력으로 보존한다. v8의 AI 요청 계약은 유지한다.
+- 2026-09-13 종료 수정 완료: macOS 포함 마지막 창 닫기·앱 종료·SIGINT/SIGTERM에서 제어 서비스와 AI/작업 정리를 기다린다. 기동·재시작 Promise를 추적해 늦은 고아 프로세스를 막고 HTTP 종료 후에도 PID 소멸을 확인한다. 서비스는 AI·설치·백업·큐·스케줄러 정리를 함께 시작한다. 화면 로딩 중 닫기에 따른 예상된 로드 취소도 처리했다. 관련 검사 52/52·데스크톱 23/23·타입·빌드 및 실제 Electron 종료 3개 시나리오, 모드 전환 회귀 통과. [근거](../../../docs/verification.md#2026-09-13-앱-종료-시-프로세스-정리). 이번 요청은 커밋하지 않았다.
 - 사용자 확정: 요청 흐름은 사용자가 직접 재설계한다. 이번에는 AI 요청 버튼의 임의 실행만 제거한다. 버튼은 현재 화면·선택 대상을 전달해 기존 채팅만 연다. 고정 요청·작업 후보·새 승인 단계는 추가하지 않는다. 채팅 전송만 실행이며 클리어 전 native CLI ID로 resume, 클리어 뒤 다음 요청만 새 세션이다.
 - 2026-09-13 요청 수정 완료: `SCREEN_REQUESTS`는 화면 이름만 보관한다. `/agent/requests`는 실제 메시지를 필수로 검증하고 빈 요청에 세션을 생성하지 않는다. 전송 시 현재 화면/대상을 전달하며 기존 대화를 이어 쓴다. CLI 지시에서도 화면 정보나 분석 질문을 설정/등록 실행으로 확대하지 않도록 정정했다. AI 19/19·데스크톱 23/23·타입·빌드 통과, 12개 화면 버튼 열기/닫기 실행 0건과 명시적 전송을 Electron에서 확인했다. [검증](../../../docs/verification.md#2026-09-13-ai-요청-자동-전송-제거).
 - 완료: Phase 15 요청 기반 CLI/MCP 도구·채팅·화면 버튼·자료 결과와 검증. 프로젝트별 대화와 전체 운영 대화는 각각 native ID/제공자/대화/요청 범위를 SQLite에 저장한다. 제공자 고정, ID 누락 시 새 세션 fallback 차단, clear 중 재요청 차단과 늦은 콜백 격리, 새 작업 디렉터리를 적용했다.
 - 2026-09-13 후속: Electron 탐색 차단이 자체 reload까지 막던 모드 전환 멈춤을 수정했다. `main.ts`에서 기존 신뢰 URL 판정을 재사용한다. `scripts/verify-desktop-mode.mjs`가 실제 IPC/페이지 재로딩/모드 분리를 검증한다(수정 전 5초 실패, 수정 후 40~393ms). 관련 23/23·타입·빌드 통과, 일반 앱 재실행 완료. [검증과 재현](../../../docs/verification.md#2026-09-13-electron-모드-전환-멈춤). 이 수정의 남은 항목은 없으며 기존 장기 수용 범위는 그대로다.
 - 등록 요청 범위: 실제 프로젝트 근거·문구·PNG 생성, 기존 계정/앱 매핑·큐 재사용. 문구 반영과 이미지 업로드 근거가 있어야 등록 완료다. 브라우저/이미지 도구는 CLI 설정을 활용하며 도구 부재·로그인·계약·알 수 없는 필수값만 요청한다. 원본 수정·빌드·심사·공개·광고·SNS 전송은 제외한다.
 - 수정 파일 이유: packages/agent는 실행·이벤트·MCP·자료/이미지 검증, controller/agent는 영속 세션·도구/실행 경계, service/server/storage는 수명주기·API·저장, AgentPanel/AgentActions/App와 각 view는 채팅·요청과 선택 전달, Electron security는 새 API 경로다. main의 기존 isTrustedSender 무한 재귀는 실제 native IPC 실패를 재현한 뒤 isTrustedFrame으로 고쳤다.
-- 검증: 관련 25/25, 타입·빌드 통과. 전체 451개: 409 pass / 36 fail / 6 skip. 깨끗한 HEAD 434개: 392 pass / 동일 36 fail / 6 skip. 신규 실패 0; 전체 성공으로 간주하지 않는다. macOS Electron 실제 창에서 버튼·선택·채팅·클리어·재기동 보존·PNG 결과·배치를 확인했다. [근거](../../../docs/verification-assets/ai-requests-20260913.md).
+- 2026-09-13 과거 검증: 관련 25/25, 타입·빌드 통과. 당시 전체 451개: 409 pass / 36 fail / 6 skip, 깨끗한 HEAD에서도 같은 36개 실패였다. 최신 전체 검사 결과는 위 2026-09-22 기록을 따른다. macOS Electron 창에서 버튼·선택·채팅·클리어·재기동 보존·PNG 결과·배치를 확인했다. [당시 근거](../../../docs/verification-assets/ai-requests-20260913.md).
 - 2차 기획: [성장 운영 v2](../ai-growth-operations/ai-growth-operations-plan-v2.md). Orca Sol/high 워커 2회 dispatch로 문서만 작성·보완했고 해제/ack 완료. 광고 실험·수익률·커뮤니티 주기 실행은 구현하지 않았다.
-- 남은 제한: 실제 CLI 모델 호출·인증, CLI에 설정된 browser/image 도구, 스토어 실계정 반영, Windows/Linux 네이티브는 미검증. 기존 전체 검사 실패는 baseline에서도 재현됐으며 새 테스트를 skip하거나 제품 경계를 낮추지 않았다. Vite 500 kB 청크 경고가 있다.
+- 남은 제한: 실제 CLI 모델 호출·인증, CLI의 browser/image 도구, 스토어 실계정, Windows·Linux 데스크톱 GUI, Xcode/iOS·Unity/Unreal·설치 가능한 Android 앱·APK SDK 도구·장기 운영은 미검증이다. Linux tmpfs/bwrap와 Mac Docker·공식 SDK는 위 실측으로 구분한다. 새 설치 패키지에서 Docker UI를 실행한 증거는 없으며 seccomp 리소스 포함 계약과 제한된 GUI PATH만 확인했다. Vite 500 kB 청크 경고가 있다.
 - 기존 다른 작업자의 ui.tsx/styles.css 변경은 커밋에서 제외해 보존한다. 사용자 요청에 따라 모드 수정과 AI 요청 수정을 별도 커밋하며 push/외부 게시하지 않는다. 기존 검증 자료는 tmp/ai-requests-20260913, 이번 화면 증거는 tmp/ai-request-review-20260913에 둔다.
-- 다음: 이번 버그 수정의 잔여 항목은 없다. 요청 UX는 사용자의 재설계가 제시되면 진행한다. 재검사 명령: node --import tsx --test tests/project-agent.test.ts tests/desktop-mode.test.ts tests/desktop-security.test.ts; npm run typecheck; npm run build.
+- 다음: 이번 양 OS Docker/키/SDK 체크포인트의 필수 잔여는 없다. 후속은 새 설치 패키지의 실제 UI 수용, Xcode/라이선스 엔진/Android SDK가 필요한 경로, 실제 CLI 로그인·모델 응답과 실계정·장기 수용이다. 실서비스 반영은 별도 명시 승인 범위에서만 수행한다. 제품 이미지가 준비된 이 작업 폴더에서는 `docker compose -f docker/runner/compose.yaml up -d --no-build --wait --wait-timeout 1800`으로 Linux 러너를 다시 띄울 수 있다. 최초 템플릿 다운로드와 연결 코드 등록은 [러너 사용법](../../../docs/runner-protocol.md)을 따른다.
 
 ### 2026-09-12 — 이전 실행 계약 (이력)
 
@@ -27,6 +38,13 @@ Last Updated: 2026-09-13
 - 금지 사항: 모의/데모 결과를 실서비스 검증으로 표시하지 않는다. 사용자 비밀 탐색·검증용 외부 배포/게시/광고 집행·고정 계획 덮어쓰기 금지. 개발 검증 당시에는 Git 저장소가 없었다. 이후 사용자 커밋·푸시 요청으로 main 저장소를 초기화했다. 최신 커밋·원격 상태는 git status/log/remote로 확인한다. 미리보기 인증 정보는 출력하지 않는다. 이번 후속 수정은 root가 단독 수행했다.
 
 ## SESSION PROGRESS
+
+### 2026-09-22 — macOS 검사 안정화·CLI/MCP 기본 진단
+
+- 결정: 실제 제품은 Store/서비스 기동에서 canonical 경로를 사용하므로 `/var` 별칭 예외를 추가하지 않는다. 독립 경로 리뷰를 받아 fixture만 realpath로 정리했다. Linux 전용 키/격리 거절 계약은 유지한다.
+- 변경: build-credentials의 메모리 저장소 가용성 판정과 테스트 경로·환경 전제를 정리했다. SDK 생성 코드 검사를 외부 도구 실행 검사와 분리했으며 명시적으로 잘못 지정한 SDK/Godot 경로는 실패한다.
+- 진단: 새 `scripts/verify-agent-cli.ts`는 설치 CLI의 신규/resume 도움말과 실제 MCP 읽기/거절 전달을 확인한다. 모델 호출·로그인·실세션 성공을 주장하지 않는다. 관련 7/7, 전체 452 통과·실패 0·16 skip, 타입·빌드 통과.
+- 상태: 구현·독립 리뷰 완료, 모든 Dispatch release/ack 및 생성한 Grok 터미널 정리. 최종 리뷰 `ctx_e1a5d8e93903`의 필수 결함 없음. acknowledge 검사 보강·빈 SDK 환경값 처리·tmpfs 오류 원인 구분은 선택적 후속으로 남긴다. [검증 기록](../../../docs/verification.md#2026-09-22-macos-검사-안정화climcp-진단). 기존 장기 체크리스트 19/61은 유지한다.
 
 ### 2026-09-12 — 실사용 검토 후속 수정 완료
 
@@ -68,19 +86,8 @@ Last Updated: 2026-09-13
 - SDK 잔여: Sol 후속 리뷰에서 Unreal 결제 4번째 인수/ValidationInfo/공개 헤더, Godot product_ids/구독 base plan, Unity internal Editor 설정 접근, iOS PBX 경로 등 P0가 남았다. [후속 리뷰](../../../docs/verification-assets/v4-sdk-followup-review.md). Grok 템플릿을 반복 성공으로 간주하지 않고 root가 실제 API/소스로 직접 수정한다. 장비 런타임 증거는 없다.
 - 다음: 전체 백업 API·원자적 활성화/롤백·원본 프로젝트 재연결, SDK P0/런타임 구매 검증, OS 빌드 격리·서명, Gradle 준비, 새 deb/AppImage와 전체 회귀/독립 수용을 계속한다. 제공된 채팅 비밀번호는 용도 답변이 없어 사용하거나 저장하지 않았다.
 
-### 2026-09-11 22:00 KST — v4 준비 API·화면·SDK 이력 보호 통합 중
-
-- 연결 완료: `packages/setup/` 준비 판정·공식 도구 카탈로그·스트리밍 설치와 `apps/controller/preparation.ts`의 영속 도구/프로젝트 설정. 도구 경로는 서비스별 인자로 전달하고 새 빌드 입력에 고정한다. `/setup` 계열 API·Electron 허용 경로·새 운영 준비 화면을 연결했다.
-- 앱 매핑: `Project.storeApps`로 Play 패키지·Apple 앱 ID·Steam AppID와 계정을 별도 저장하고 실제 조회로 검증한다. 원본 모바일 식별자를 Steam 숫자로 덮어쓰지 않는다. 전역의 도구 1개/키 1개로 전체를 준비됨으로 표시하던 운영 요약을 프로젝트·대상별 판정으로 교체했다.
-- SDK: Grok 최초 결과의 실제 API 불일치와 원본 프로젝트 내 이력 신뢰 문제가 독립 검토에서 발견됐다. root가 `withIntegrationStorage`로 운영 데이터 밖 원본과 분리된 이력 저장소를 강제하고 변경/백업 해시 검증, 원자적 잠금, 실패 복구, 편집 충돌, 중복 적용 방지를 다시 구현했다. `/projects/:id/integration`의 조회·미리보기·적용·되돌리기와 같은 데모/실제 UI를 연결했다. 템플릿·구매 완료 흐름은 수정 중이며 실행 검증 완료를 주장하지 않는다.
-- 검증: 기존 SDK 검사 9/9, 추가 SDK 보호/복구 5/5, 준비 API·서비스 격리·부정 판정·Steam 매핑·SDK 적용/재시작/되돌리기 4/4 통과. 타입 검사 2026-09-11 21:56 KST 통과. 이후 템플릿 수정이 진행되므로 최종 재검사가 필요하다. 로그 `/tmp/appops-sdk-root-tests.log`, `/tmp/appops-sdk-security-tests.log`, `/tmp/appops-preparation-tests.log`, `/tmp/appops-typecheck-v4-green.log`.
-- 워커 결과: Opus 수명주기/자동 시작 27개 집중 검사와 새 준비 화면 API 연결·데모 브라우저 확인을 회수했다. Grok 설치기와 실제 Linux Godot 공식 다운로드/압축 해제를 회수했고 타입 오류를 수정했다. 최종 독립 수용은 아직 진행 중이다.
-- 네이티브 시험: 기존 시스템 `/opt/google/chrome/chrome-sandbox`가 root:root 4755임을 확인했다. 개발용 `node_modules/electron/dist/chrome-sandbox`만 해당 파일의 심볼릭 링크로 교체해 Electron 44.3.0/Chromium 152.0.7977.78의 **시험 창**을 `sandbox:true`로 실행하고 정상 종료했다. 원본은 `/tmp/appops-bundled-sandbox-<sha>`에 보존했다. 시스템 권한·설정 변경은 없다. 실제 제품 창·패키지 전체 검증과 안전한 런처 통합은 아직 남아 있다. 환경 변수 CHROME_DEVEL_SANDBOX는 이 Electron에서 무시됐다.
-- OS 조사: Apple XNU 공식 소스에서 NOTE_TRACK/NOTE_CHILD가 macOS 10.5 이후 미지원임을 확인했다. 이를 이용한 자식 추적을 구현하거나 지원으로 표시하지 않는다. macOS 격리·서명과 Windows 격리·전체 암호화 백업·Gradle 의존성 준비·구매 서버 검증은 다음 핵심 작업이다.
-- 다음: 템플릿 수정과 독립 리뷰 지적을 회수·통합하고 실제 앱 창을 검증한다. 프로젝트 수정 중 빌드/복구 차단을 보완하고 도구 설치·전체 백업·네이티브 실행의 남은 구현을 계속한다.
-
-
 ## 이전 세션 요약
 
+- 2026-09-11 22:00 KST — v4 준비 API·앱별 매핑·원본과 분리된 SDK 이력 보호 연결, SDK 9/9·보호 5/5·준비 4/4 및 타입 검사 통과. 당시 네이티브 시험 창만 확인했고 이후 수용 결과는 위 후속 세션과 검증 색인을 따른다. 미지원 NOTE_TRACK 기반 자식 추적은 사용하지 않는다.
 - 2026-09-11 20:40 KST — v3 구현·화면·패키지 검증 완료 — 세부 결과는 검증 색인과 해당 버전 계획에 보존.
 - 2026-09-11 — v2 키·SNS와 기반 구현 — 세부 결과는 검증 색인과 해당 버전 계획에 보존.

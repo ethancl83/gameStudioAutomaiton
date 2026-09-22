@@ -1,8 +1,52 @@
 # 구현 검증 기록
 
-Last Updated: 2026-09-13 (AI 요청 자동 전송 제거; 아래 기록은 과거 체크포인트)
+Last Updated: 2026-09-22 (macOS Docker/Linux 실행·공식 SDK 이식성; 아래 날짜별 기록은 해당 체크포인트)
 
-[계획 v8](../dev/active/app-operations-platform/app-operations-platform-plan-v8.md) · [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md) · [맥락](../dev/active/app-operations-platform/app-operations-platform-context.md) · [실제 지원 범위](integration-capabilities.md)
+[계획 v9](../dev/active/app-operations-platform/app-operations-platform-plan-v9.md) · [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md) · [맥락](../dev/active/app-operations-platform/app-operations-platform-context.md) · [실제 지원 범위](integration-capabilities.md)
+
+## 2026-09-22 macOS Docker·Linux 실행과 SDK 이식성
+
+사용자가 추가 실행 환경을 승인하여 macOS에는 전용 Docker Linux 경로를 추가하고 Linux의 기존 bwrap/tmpfs 실행을 유지했다. 워커는 사용자 변경 지시에 따라 `gpt-6-astra ultra fast`로 전환했으며 실제 실행 화면에서 확인했다. 이전 Grok 작업의 SDK 구현과 기존 미커밋 변경을 보존했다.
+
+- **실제 Mac→Linux 빌드:** macOS ARM64 컨트롤러에서 인증 HTTP로 Docker Linux ARM64 러너에 Godot 4.3 빌드를 요청했다. bwrap 격리 export 후 실행 파일 **59,761,504 bytes**, PCK **1,840 bytes**를 Mac으로 회수했다. 회수한 동일 바이트의 복사본을 Linux bwrap에서 실행해 `AppOps controller build OK`, exit 0을 확인했다. [빌드·해시](../tmp/cross-platform-linux-20260922/mac-to-docker-godot.log) · [게임 실행](../tmp/cross-platform-linux-20260922/mac-docker-game-execution.log).
+- **Docker 경계:** 호스트 공개 주소는 `127.0.0.1:4320`, 미인증 health 401/인증 200, `ready:true`, bwrap 0.8.0, 연결코드 파일 0600을 확인했다. 상주 컨테이너는 read-only root·이름 있는 전용 volume·로그 저장 없음이며 홈/DB/vault/Docker socket을 연결하지 않는다. cap drop ALL 후 필요한 4개만 추가하고 기본 seccomp에서 bwrap의 `pivot_root`만 허용했다. [실측 권한](../tmp/cross-platform-linux-20260922/minimum-capabilities.json) · [사용법](runner-protocol.md).
+- **실제 Mac 키 작업:** 별도 일회성 Linux helper로 SSH/Android 키 등록, 잘못된 암호 거절, AAB/JAR 서명, 지문·링크·APK 도구 부재의 원본 보존, timeout 정리, SSH loopback 거절/도달 가능한 서버 성공/잘못된 서버 키 거절을 확인했다. 전송 실패·취소·동시 작업·입출력 한도까지 포함한 통합/protocol **14/14**, 제한된 GUI PATH에서 실제 SSH 양성/암호 음성 **1/1** 통과. [실측 로그](../tmp/cross-platform-docker-key-20260922/final-focused.log) · [GUI PATH](../tmp/cross-platform-docker-key-20260922/gui-path.log) · [키 작업 계약](build-credentials.md#macos의-docker-키-작업). 초기 `integration.log`는 확장 검사 관찰 타이밍 수정 전 실패 기록이며 최종 결과로 사용하지 않는다.
+- **공식 SDK:** `node --import tsx scripts/prepare-verification-tools.ts`로 고정 해시의 Unity IAP 5.4.2·MAX 8.6.5·Play Billing 9.1.0과 호스트용 Godot 4.3을 `tmp/cross-platform-sdk-20260922/`에 준비한다. 전역 설치·라이선스 동의는 하지 않으며 javac/C++ 컴파일러는 별도로 필요하다. Mac 실제 SDK 집중 5/5, Linux SDK·압축 검사 26 통과/0 실패/Android ARM64 미지원 1 skip. AppleDouble 예외에도 경로·타입·크기 한도를 유지했다. [Mac](../tmp/cross-platform-sdk-20260922/mac-results.txt) · [Linux](../tmp/cross-platform-linux-20260922/sdk-tests.log).
+- **SDK 독립 리뷰:** 명시한 `APPOPS_SDK_REVIEW_ROOT`에 Billing JAR가 없어도 skip되던 결함을 재현 후 수정했다. 명시 경로 누락 실패와 유효 공식 JAR의 실제 javac, 기타 SDK 회귀 **14/14**. 빈 환경값도 실패한다. [회귀 로그](../tmp/cross-platform-sdk-20260922/review-regression.log).
+- **전체 회귀:** 최종 소스 Mac **500개 중 485 통과·0 실패·15 skip**, Linux **500개 중 491 통과·0 실패·9 skip**. 양 OS 타입 검사·빌드 통과. Mac 기본 검사의 Docker 키 4개는 opt-in이라 별도 실측으로 확인했다. Linux 전용/native 반대 조건과 선택적 실다운로드의 skip을 실제 성공으로 계산하지 않는다. [Mac 전체](../tmp/cross-platform-sdk-20260922/npm-test-reviewed-mac.log) · [Linux 전체](../tmp/cross-platform-linux-20260922/npm-test-reviewed-linux.log). Vite의 기존 500 kB 청크 경고는 남는다.
+- **Docker 독립 리뷰와 수정:** A/B 최초 독립 리뷰에서 발견한 daemon 전환 정리 오인은 endpoint·실행 파일·환경·daemon ID 고정과 회귀 **3/3**으로 수정했다. 큐/API가 취소 뒤 cleanup 오류·이미 완료한 서명을 잃는 문제는 빌드 정리까지 소유권 유지, 서명별 checkpoint, 공개 복구 ID의 API/이력 기록으로 수정했다. 실제 Store/JobQueue/HTTP와 재시작을 포함한 관련 **31/31**, 데모·종료 영향 검사 **52/52** 통과. 외부 쓰기 취소 fencing은 유지했다. [daemon 회귀](../tmp/cross-platform-docker-key-20260922/daemon-boundary.log) · [소비자 회귀](../tmp/cross-platform-docker-key-20260922/consumer-regression.log) · [취소 영향](../tmp/cross-platform-docker-key-20260922/cancellation-regression.log). daemon 중단·응답 유실은 통신 경계의 제한된 결함 주입이며 실제 Docker 설정을 변경한 시험이 아니다.
+- **최종 이미지:** 리뷰 수정 후 allowlist context를 새로 만들고 53파일의 현재 소스 일치를 확인하여 `appops-linux-runner:local`을 다시 빌드했다. 이 이미지로 실제 키·protocol·daemon·큐/API 통합 **26/26**, skip 0을 확인했다. [최종 실측](../tmp/cross-platform-docker-key-20260922/reviewed-image-integration.log) · [이미지 빌드](../tmp/cross-platform-linux-20260922/runner-image-reviewed-build.log). 생성한 검증용 컨테이너·네트워크·volume·임시 연결 코드는 제거하고 제품 이미지와 공개 검증 도구·로그는 보존했다. 워커 터미널도 모두 종료/release했다.
+
+실제 키 검사는 이미지 준비 후 다음처럼 실행한다. 일반 전체 검사가 Docker 설치·다운로드를 자동으로 수행하지는 않는다.
+
+```sh
+APPOPS_DOCKER_KEY_TESTS=1 node --import tsx --test tests/docker-key-integration.test.ts
+```
+
+현재 실측은 macOS ARM64와 Docker Linux ARM64다. Xcode/iOS·Unity/Unreal 라이선스 빌드·설치 가능한 Android 앱/APK build-tools·Windows·실서비스 게시·장기 운영 완료를 뜻하지 않는다. 기본 키 이미지는 JDK만 포함하므로 APK 도구 부재를 명시적으로 거절한다. 네이티브 macOS 무격리 실행이나 평문 키 디스크 fallback은 추가하지 않았다. 새 설치 패키지와 실제 Electron 창에서의 Docker 작업은 이번 실측 대상이 아니다.
+
+## 2026-09-22 macOS 검사 안정화·CLI/MCP 진단
+
+Grok 4.7/high 구현 워커 2개가 검사 안정화와 CLI 진단을 분담했다. 기존 사용자 UI·앱 종료 변경은 보존했다. 제품의 심볼릭 링크 보호를 완화하지 않고 macOS 테스트 fixture를 실제 경로로 맞췄으며, Linux 메모리 키 저장소가 없으면 명시적 오류로 거절한다.
+
+- 수정 전 `npm test`: **455개 중 413 통과·36 실패·6 skip**. 최신 통합 검사: **468개 중 452 통과·실패 0·16 skip**. 36개 실패 중 26개는 경로/테스트 실행 전제를 수정했고, 10개는 이 환경에서 수행할 수 없는 실제 도구 검사로 명시했다. [기준선](../tmp/core-stability-20260922/npm-test-baseline.log) · [통합 결과](../tmp/core-stability-20260922/npm-test-integrated.log).
+- 추가 skip 10개: Linux tmpfs 키 작업 4개·SSH 1개, 실제 bwrap 호스트 파일 은닉 1개, 공식 Unity IAP/MAX 소스·Billing JAR·Godot 4.3 검사 4개. 기존 skip 6개도 남아 있다. 격리 없는 실행 거절과 생성 코드 검사는 별도로 통과했으며 실제 서명·격리·SDK 실행 성공으로 계산하지 않는다.
+- 외부 도구는 `APPOPS_SDK_REVIEW_ROOT`, `APPOPS_BILLING_JAR`, `APPOPS_GODOT`으로 지정할 수 있다. 각각 존재하지 않는 경로를 명시한 음성 검사에서 Unity 2개·Billing 1개·Godot 1개가 **skip 없이 예상대로 실패**했다. 설정 오류를 성공으로 숨기지 않는다.
+- `npm run typecheck`와 `npm run build` 통과. [최종 타입 검사](../tmp/core-stability-20260922/typecheck-integrated.log). Vite의 기존 500 kB 청크 경고는 남는다. 새 네이티브 패키지·설치/종료 시험은 이번에 실행하지 않았다.
+- `node --import tsx scripts/verify-agent-cli.ts`: 제품 탐색이 선택한 **Codex 0.155.1·OpenCode 1.4.3**의 버전과 신규/resume 도움말을 확인했다. 실제 stdio MCP 프로세스의 초기화·도구 목록·fixture 읽기·쓰기 거부 전달도 통과했다. 회귀 검사 **7/7**에는 시간/출력 제한, 임시 디렉터리 정리, 포트 바인딩 실패를 포함한다. [진단 결과](../tmp/agent-cli-20260922/report.json) · [실행 방법과 한계](ai-operations.md#설치된-cli와-mcp-연결-진단).
+- 도움말 수락은 실제 로그인·모델 응답·세션 재개의 증거가 아니다. CLI에 설정된 브라우저/이미지 도구, 스토어 실계정 반영, Windows/Linux 네이티브 및 장기 운영은 미검증이다. 커밋·푸시·외부 게시를 수행하지 않았다.
+- 독립 경로 설계 검토에서는 실제 호출자의 canonical 경로 처리를 확인해 제품 별칭 예외를 추가하지 않기로 했다. 별도 Grok 최종 리뷰도 완료했으며 필수 결함은 없었다. acknowledge 단언 보강·빈 환경변수 처리·tmpfs 오류 원인 구분은 선택적 개선으로 남겼다. [리뷰 근거](../tmp/core-final-review-20260922.md).
+
+## 2026-09-13 앱 종료 시 프로세스 정리
+
+수정 전 빌드에서 마지막 창을 닫아도 앱이 남아 네이티브 검사의 35초 제한으로 실패했다. 이제 macOS 창 닫기도 앱 종료로 연결하며, 기동·재시작이 끝난 뒤 기존 중지 경로로 제어 서비스와 실행 중인 AI/작업을 정리한다. HTTP가 먼저 내려가더라도 실제 PID 종료를 기다린다. AI 정리를 기다리는 동안 큐가 새 작업을 실행하지 않도록 모든 서비스의 중지를 함께 시작한다.
+
+- `node --import tsx --test tests/lifecycle.test.ts tests/lifecycle-hardening.test.ts tests/project-agent.test.ts`: **52/52**. HTTP 종료 후 PID가 남는 경우의 대기·강제 종료, PID 신원 확인과 중지 표식, Codex/OpenCode 취소를 확인했다.
+- `node --import tsx --test tests/desktop-mode.test.ts tests/desktop-security.test.ts`: **23/23**. `npm run typecheck`·`npm run build` 통과. 기존 Vite 청크 경고는 남아 있다. 전체 검사는 이번 범위에서 재실행하지 않았다.
+- `npm run build` 후 [네이티브 종료 검사](../scripts/verify-desktop-exit.mjs) `node scripts/verify-desktop-exit.mjs`: **3/3**. 데모 창 닫기, 실제 모드 앱 종료, 기동 직후 창 닫기에서 앱/제어 서비스 PID·HTTP 포트 종료와 메타데이터 제거를 확인했다. 준비된 서비스의 중지 표식도 확인한다. 실제 모드 검사는 별도 제어 서비스의 기존 CLI 탐색 주입 경계에 로컬 실행기 대역을 넣으며 제품 CLI 실행·취소 코드를 그대로 쓴다. SIGTERM을 무시하는 CLI와 그 자식도 종료된다.
+- 기동 직후 닫기 검사에서 화면 로드 취소가 처리되지 않는 오류도 발견해 수정했다. 최종 검사는 미처리 Promise 거절을 실패로 취급하며 통과했다.
+- [모드 전환 검사](../scripts/verify-desktop-mode.mjs) 통과: 실제↔데모 **33/40/31/39ms**, 취소와 비신뢰 탐색 차단 유지.
+- 검증 환경은 macOS Electron이며 Windows/Linux 네이티브·강제 종료(SIGKILL)/전원 차단·외부 서비스 작업 종료를 검증한 결과가 아니다. 실 LLM 응답과 스토어 반영의 검증으로 해석하지 않는다. 기존 사용자 `ui.tsx`/`styles.css` 변경은 보존했다.
 
 ## 2026-09-13 AI 요청 자동 전송 제거
 

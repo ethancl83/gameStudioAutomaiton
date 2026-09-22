@@ -1,6 +1,6 @@
 # Dev Catalog
 
-Last Updated: 2026-09-13
+Last Updated: 2026-09-22
 
 ## 예정
 
@@ -14,7 +14,11 @@ Last Updated: 2026-09-13
 
 ### 앱 출시·마케팅·수익화·커뮤니티 통합 자동화 개발계획 `19/61 (31%)`
 
-[`app-operations-platform`](active/app-operations-platform/app-operations-platform-plan-v8.md) · 생성일 `2026-09-11` · 태스크 수정일 `2026-09-13` · v1~v7 승계. v8 버튼 임의 실행 제거 완료, 기존 장기 수용 조건 진행 중. 체크리스트 완수율이며 제품 구현률이 아니다.
+[`app-operations-platform`](active/app-operations-platform/app-operations-platform-plan-v9.md) · 생성일 `2026-09-11` · 태스크 수정일 `2026-09-22` · v1~v8 승계. v9 앱 종료 시 프로세스 정리 완료, 기존 장기 수용 조건 진행 중. 체크리스트 완수율이며 제품 구현률이 아니다.
+
+최근 체크포인트(2026-09-22): Grok 워커의 macOS 검사 안정화·CLI/MCP 기본 진단 구현 완료. 통합 452 통과·실패 0·환경 skip 16, 타입·빌드 및 독립 리뷰 완료. 실계정·다른 OS·장기 수용은 남아 있다.
+
+최신 후속 완료: `gpt-6-astra ultra fast` 워커로 Mac Docker/Linux 빌드·키·SDK 경로를 구현하고 실제 Godot 빌드·서명·SSH 및 독립 리뷰 수정을 확인했다. 최종 500개 검사 Mac 485 통과/15 skip, Linux 491 통과/9 skip, 실패 0·양 OS 타입·빌드 통과. 최신 이미지의 키/취소/복구 26/26. [결과와 제한](../docs/verification.md#2026-09-22-macos-dockerlinux-실행과-sdk-이식성). 전체 장기 체크리스트 완수율은 유지한다.
 
 프로젝트명·비공개 GitHub 저장소명: `gameStudioAutomaiton` (`sphacker83/gameStudioAutomaiton`).
 
@@ -23,3 +27,5 @@ Last Updated: 2026-09-13
 후속: Electron 모드 전환의 자체 새로고침 차단을 수정했다. 네이티브 양방향 전환·취소·격리와 관련 23/23·타입·빌드를 확인했다. [검증과 재현](../docs/verification.md#2026-09-13-electron-모드-전환-멈춤).
 
 최신 요청: AI 버튼은 기존 채팅만 열며, 숨겨진 고정 지시를 제거했다. 요청 흐름의 재설계는 사용자가 맡는다. AI 19/19·데스크톱 23/23·타입·빌드·12개 화면의 무실행 확인. [검증](../docs/verification.md#2026-09-13-ai-요청-자동-전송-제거).
+
+종료 후속: macOS 포함 창 닫기·앱 종료 시 제어 서비스·AI·작업을 함께 정리한다. 관련 75/75·타입·빌드·네이티브 종료 3개 시나리오와 모드 전환 회귀 통과. [검증](../docs/verification.md#2026-09-13-앱-종료-시-프로세스-정리).
