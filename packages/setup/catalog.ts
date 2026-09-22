@@ -43,6 +43,7 @@ const temurinBase = `https://github.com/adoptium/temurin21-binaries/releases/dow
 /** Official SHA-512 from Godot 4.3-stable SHA512-SUMS.txt (fetched 2026-09-11). */
 const GODOT_SHA512: Record<string, string> = {
   'Godot_v4.3-stable_linux.x86_64.zip': 'fd52bb4ba8acc30ca5accd1c566d470ad7282f891ccc0995dfafabcf92bcf76280ce182bf9d80ebd885f3ed2165d01e1fc3f2928436b15498dfbd98656c2a45a',
+  'Godot_v4.3-stable_linux.arm64.zip': 'bf559c7d24f2a7c8980d021c9e8c54baa66c5f3a1a0c1fb6fe73586eca63417fd365adf2e6c8be0b5944ab80da800fe4aa3a9024f58363f5dc3962e6127c0dc6',
   'Godot_v4.3-stable_macos.universal.zip': '8a556637aa6b83a60473decdb43a448b214f31fd13318b6f7ba2ebc4cca4e40d1f7a933330ce40afa8d72273ef6a6f3a0e3b0f0abf8e1be3fe4f03119cae62c2',
   'Godot_v4.3-stable_win64.exe.zip': 'ad09b7e19949327700dfbe64e35880a2a08091c0751277f5cc21b915e5df9b4fe93fb43c50d6bdfb9d16b46168592491aa698e0d2dbe9f92132e163dd77b97e1',
   'Godot_v4.3-stable_export_templates.tpz': '476366caf0fd45a8f24136cf9cf1dc0bc2b96f7c82d53e5f82200b55aefd07b286d283fd6f1ce29e0de70648c5a51d3b12f96c6d4fafd4e8c4878ecda6406d6a',
@@ -166,6 +167,7 @@ export const TOOL_CATALOG: ToolCatalogItem[] = [
 
 function godotEditor(platform: NodeJS.Platform, arch: string): {file:string; entry:string} {
   if (platform === 'linux' && arch === 'x64') return {file:'Godot_v4.3-stable_linux.x86_64.zip', entry:'Godot_v4.3-stable_linux.x86_64'};
+  if (platform === 'linux' && arch === 'arm64') return {file:'Godot_v4.3-stable_linux.arm64.zip', entry:'Godot_v4.3-stable_linux.arm64'};
   if (platform === 'win32' && arch === 'x64') return {file:'Godot_v4.3-stable_win64.exe.zip', entry:'Godot_v4.3-stable_win64.exe'};
   if (platform === 'darwin') return {file:'Godot_v4.3-stable_macos.universal.zip', entry:'Godot.app/Contents/MacOS/Godot'};
   throw new AppError('INSTALL_PLATFORM', '이 장비용 자동 설치 파일이 없습니다. 기존 도구 경로를 연결해 주세요.');

@@ -2,13 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile, lstat, mkdir } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync, zipSync } from 'fflate';
 import { AppError } from '../packages/domain/errors.js';
-import { extractZip } from '../packages/setup/archive.js';
+import { ZIP_LIMITS, extractZip } from '../packages/setup/archive.js';
 import { GITHUB_RELEASE_HOSTS, GOOGLE_DL_HOSTS, packageFor } from '../packages/setup/catalog.js';
 import { assertOfficialUrl, downloadVerified, expectedDecodedLength, extractTarGz } from '../packages/setup/download.js';
 
@@ -22,7 +20,7 @@ function expectCode(error: unknown, code: string): boolean {
   return error instanceof AppError && error.code === code;
 }
 
-function tarHeader(options: {name: string; size: number; type?: string; mode?: string; linkname?: string}): Buffer {
+function tarHeader(options: {name: string; size: number; type?: string; mode?: string; linkname?: string; format?: 'ustar' | 'gnu'; prefix?: string; gnuRegion?: string}): Buffer {
   const header = Buffer.alloc(512);
   header.write(options.name, 0, 100, 'utf8');
   header.write((options.mode ?? '0000644').slice(-7) + '\0', 100, 8, 'ascii');
@@ -33,8 +31,16 @@ function tarHeader(options: {name: string; size: number; type?: string; mode?: s
   header.fill(0x20, 148, 156);
   header.write(options.type ?? '0', 156, 1, 'ascii');
   if (options.linkname) header.write(options.linkname, 157, 100, 'utf8');
-  header.write('ustar\0', 257, 6, 'ascii');
-  header.write('00', 263, 2, 'ascii');
+  if (options.format === 'gnu') {
+    header.write('ustar ', 257, 6, 'ascii');
+    header[263] = 0x20;
+    header[264] = 0;
+    header.write(options.gnuRegion ?? '../not-prefix', 345, 80, 'utf8');
+  } else {
+    header.write('ustar\0', 257, 6, 'ascii');
+    header.write('00', 263, 2, 'ascii');
+    if (options.prefix) header.write(options.prefix, 345, 155, 'utf8');
+  }
   let sum = 0;
   for (const byte of header) sum += byte;
   header.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8, 'ascii');
@@ -63,6 +69,11 @@ test('catalog pins official Godot 4.3 and Temurin 21 digests', () => {
   assert.equal(templates.sha512, '476366caf0fd45a8f24136cf9cf1dc0bc2b96f7c82d53e5f82200b55aefd07b286d283fd6f1ce29e0de70648c5a51d3b12f96c6d4fafd4e8c4878ecda6406d6a');
   const android = packageFor('android-sdk', 'linux', 'x64');
   assert.equal(android.sha256, '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583');
+  const armGodot = packageFor('godot', 'linux', 'arm64');
+  assert.equal(armGodot.name, 'Godot_v4.3-stable_linux.arm64.zip');
+  assert.equal(armGodot.entry, 'Godot_v4.3-stable_linux.arm64');
+  assert.equal(armGodot.sha512, 'bf559c7d24f2a7c8980d021c9e8c54baa66c5f3a1a0c1fb6fe73586eca63417fd365adf2e6c8be0b5944ab80da800fe4aa3a9024f58363f5dc3962e6127c0dc6');
+  assert.notEqual(armGodot.sha512, godot.sha512);
   const jdk = packageFor('jdk', 'linux', 'x64');
   assert.equal(jdk.sha256, 'ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94');
   assert.equal(jdk.archive, 'tar.gz');
@@ -310,19 +321,87 @@ test('extractTarGz writes regular files and rejects traversal, symlink and hardl
   await assert.rejects(() => extractTarGz(escape, join(dir, 'from-esc')), (error: unknown) => expectCode(error, 'UNSAFE_ARCHIVE'));
 });
 
-test('extractTarGz accepts real GNU, oldgnu, PAX and ustar archives including metadata-only PAX', {skip: process.platform !== 'linux'}, async t => {
+test('extractTarGz accepts portable ustar, GNU, oldgnu and metadata-only PAX fixtures', async t => {
+  // macOS bsdtar emits ustar and pax only. GNU and oldgnu share the "ustar " magic
+  // and store atime where ustar stores a path prefix. These fixtures are that branch.
   const dir = await tempDir(t, 'appops-tar-formats-');
-  const source = join(dir, 'source');
-  await mkdir(join(source, 'jdk', 'bin'), {recursive: true});
-  await writeFile(join(source, 'jdk', 'bin', 'java'), 'executable fixture', {mode: 0o700});
-  for (const format of ['gnu', 'oldgnu', 'pax', 'ustar']) {
-    const archive = join(dir, `${format}.tar.gz`);
-    await promisify(execFile)('/usr/bin/tar', [`--format=${format}`, '-czf', archive, '-C', source, '.']);
-    const destination = join(dir, `out-${format}`);
+  const content = Buffer.from('executable fixture');
+  const cases: Array<{name: string; bytes: Buffer}> = [
+    {
+      name: 'ustar',
+      bytes: Buffer.concat([
+        tarHeader({name: 'bin/java', size: content.length, mode: '0000755', prefix: 'jdk'}),
+        content, Buffer.alloc((512 - (content.length % 512)) % 512), Buffer.alloc(1024),
+      ]),
+    },
+    {
+      name: 'gnu',
+      bytes: Buffer.concat([
+        tarHeader({name: 'jdk/bin/java', size: content.length, mode: '0000755', format: 'gnu', gnuRegion: '../not-prefix'}),
+        content, Buffer.alloc((512 - (content.length % 512)) % 512), Buffer.alloc(1024),
+      ]),
+    },
+    {
+      name: 'oldgnu',
+      bytes: Buffer.concat([
+        tarHeader({name: 'jdk/bin/java', size: content.length, mode: '0000755', format: 'gnu', gnuRegion: '../oldgnu-atime'}),
+        content, Buffer.alloc((512 - (content.length % 512)) % 512), Buffer.alloc(1024),
+      ]),
+    },
+  ];
+  const metadata = paxRecord('mtime', '1700000000');
+  cases.push({
+    name: 'pax-metadata',
+    bytes: Buffer.concat([
+      tarHeader({name: 'PaxHeader', type: 'x', size: metadata.length}),
+      metadata, Buffer.alloc((512 - (metadata.length % 512)) % 512),
+      tarHeader({name: 'jdk/bin/java', size: content.length, mode: '0000755'}),
+      content, Buffer.alloc((512 - (content.length % 512)) % 512), Buffer.alloc(1024),
+    ]),
+  });
+  for (const item of cases) {
+    const archive = join(dir, `${item.name}.tar.gz`);
+    await writeFile(archive, gzipSync(item.bytes));
+    const destination = join(dir, `out-${item.name}`);
     await extractTarGz(archive, destination);
-    assert.equal(await readFile(join(destination, 'jdk/bin/java'), 'utf8'), 'executable fixture');
-    assert.equal((await lstat(join(destination, 'jdk/bin/java'))).mode & 0o700, 0o700);
+    assert.equal(await readFile(join(destination, 'jdk/bin/java'), 'utf8'), 'executable fixture', item.name);
+    assert.equal((await lstat(join(destination, 'jdk/bin/java'))).mode & 0o700, 0o700, item.name);
   }
+});
+
+test('extractTarGz skips AppleDouble sidecars and still rejects other trailing-dot names', async t => {
+  const dir = await tempDir(t, 'appops-appledouble-');
+  const archive = join(dir, 'apple.tar.gz');
+  await writeFile(archive, gzipSync(tarArchive([
+    {name: '._.', content: Buffer.from('sidecar')},
+    {name: './._sidecar', content: Buffer.from('sidecar')},
+    {name: 'jdk/bin/java', content: Buffer.from('java-bin')},
+  ])));
+  await extractTarGz(archive, join(dir, 'out'));
+  assert.equal(await readFile(join(dir, 'out/jdk/bin/java'), 'utf8'), 'java-bin');
+  await assert.rejects(() => lstat(join(dir, 'out/._.')));
+  await assert.rejects(() => lstat(join(dir, 'out/._sidecar')));
+  const dotted = join(dir, 'dotted.tar.gz');
+  await writeFile(dotted, gzipSync(tarArchive([{name: 'jdk/readme.', content: Buffer.from('no')}])));
+  await assert.rejects(() => extractTarGz(dotted, join(dir, 'dotted')), (error: unknown) => expectCode(error, 'UNSAFE_ARCHIVE'));
+
+  const escape = join(dir, 'escape.tar.gz');
+  await writeFile(escape, gzipSync(tarArchive([{name: '../._x', content: Buffer.from('no')}])));
+  await assert.rejects(() => extractTarGz(escape, join(dir, 'escape')), (error: unknown) => expectCode(error, 'UNSAFE_ARCHIVE'));
+
+  const special = join(dir, 'special.tar.gz');
+  await writeFile(special, gzipSync(Buffer.concat([
+    tarHeader({name: '._x', size: 0, type: '6'}),
+    Buffer.alloc(1024),
+  ])));
+  await assert.rejects(() => extractTarGz(special, join(dir, 'special')), (error: unknown) => expectCode(error, 'UNSAFE_ARCHIVE'));
+
+  const huge = join(dir, 'huge.tar.gz');
+  await writeFile(huge, gzipSync(Buffer.concat([
+    tarHeader({name: '._huge', size: ZIP_LIMITS.file + 1}),
+    Buffer.alloc(1024),
+  ])));
+  await assert.rejects(() => extractTarGz(huge, join(dir, 'huge')), (error: unknown) => expectCode(error, 'ARCHIVE_LIMIT'));
 });
 
 function paxRecord(key: string, value: string): Buffer {
@@ -377,15 +456,24 @@ test('verified tool archives materialize internal license links without creating
 });
 
 test('downloadVerified pulls the pinned Android command-line tools zip through Node fetch', {timeout: 180_000}, async t => {
-  if (process.platform !== 'linux' || process.arch !== 'x64') return t.skip('linux x64 host required');
+  let pkg;
+  try { pkg = packageFor('android-sdk'); }
+  catch (error) {
+    if (error instanceof AppError && error.code === 'INSTALL_PLATFORM') return t.skip(error.message);
+    throw error;
+  }
   if (process.env.APPOPS_SKIP_LIVE_INSTALL === '1') return t.skip('APPOPS_SKIP_LIVE_INSTALL=1');
-  const pkg = packageFor('android-sdk', 'linux', 'x64');
+  const legacyLinux = process.platform === 'linux' && process.arch === 'x64';
+  if (!legacyLinux && process.env.APPOPS_RUN_LIVE_DOWNLOAD !== '1') {
+    return t.skip(`이 호스트의 Android cmdline 실다운로드는 APPOPS_RUN_LIVE_DOWNLOAD=1 입니다 (${process.platform}/${process.arch}).`);
+  }
   assert.deepEqual(pkg.allowedHosts.slice(), [...GOOGLE_DL_HOSTS]);
-  const dir = await mkdtemp(join('/tmp', 'appops-dl-verified-'));
+  const dir = await mkdtemp(join(tmpdir(), 'appops-dl-verified-'));
   t.after(() => rm(dir, {recursive: true, force: true}));
   const dest = join(dir, pkg.name);
   const started = Date.now();
-  const evidence = join('/tmp', 'appops-download-verified-cmdline.json');
+  const evidence = join(process.cwd(), 'tmp/cross-platform-sdk-20260922/download-verified-cmdline.json');
+  await mkdir(join(process.cwd(), 'tmp/cross-platform-sdk-20260922'), {recursive: true});
   try {
     const result = await downloadVerified({
       url: pkg.url, destination: dest, sha256: pkg.sha256, maxBytes: pkg.maxBytes, allowedHosts: pkg.allowedHosts,
@@ -404,7 +492,7 @@ test('downloadVerified pulls the pinned Android command-line tools zip through N
     const message = error instanceof Error ? error.message : String(error);
     await writeFile(evidence, `${JSON.stringify({
       ok: false, url: pkg.url, error: message, ms: Date.now() - started, fetch: 'node-fetch-downloadVerified',
-      fallback: '/tmp/appops-cmdline-15859902.zip',
+      fallback: pkg.name,
     }, null, 2)}\n`);
     if (/ECONN|ENOTFOUND|network|TLS|certificate|aborted/i.test(message)) {
       return t.skip(`official CDN unavailable: ${message}`);

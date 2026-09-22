@@ -1,14 +1,49 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { AppError } from '../packages/domain/errors.js';
 import { planAndroid } from '../packages/project-integration/templates/android.js';
 import { planGodot } from '../packages/project-integration/templates/godot.js';
 import { planUnreal } from '../packages/project-integration/templates/unreal.js';
 import { planUnity } from '../packages/project-integration/templates/unity.js';
 import type { TemplateContext } from '../packages/project-integration/types.js';
+import { explicitEnv, godotBinaryFor, sdkReviewRootFor } from '../scripts/prepare-verification-tools.js';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+function sdkReviewRoot(): string {
+  return explicitEnv('APPOPS_SDK_REVIEW_ROOT') ?? sdkReviewRootFor(repoRoot);
+}
+
+async function officialTexts(t: TestContext, envName: string, paths: string[]): Promise<string[] | undefined> {
+  const configured = explicitEnv(envName);
+  const explicit = configured !== undefined;
+  const texts: string[] = [];
+  for (const path of paths) {
+    try {
+      const text = await readFile(path, 'utf8');
+      if (!text.trim()) assert.fail(`공식 SDK 소스가 비어 있습니다: ${path}`);
+      texts.push(text);
+    } catch (error) {
+      if (explicit || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      t.skip(`공식 SDK 소스가 없습니다: ${path}. node --import tsx scripts/prepare-verification-tools.ts 로 준비하거나 ${envName}로 검토 트리 루트를 지정할 수 있습니다.`);
+      return undefined;
+    }
+  }
+  return texts;
+}
+
+function probeGodot(path: string): { ok: true; version: string } | { ok: false; launched: boolean; detail: string } {
+  const probed = spawnSync(path, ['--version'], { encoding: 'utf8' });
+  if (probed.error) return { ok: false, launched: false, detail: probed.error.message };
+  const version = `${probed.stdout ?? ''}${probed.stderr ?? ''}`.trim();
+  if (probed.status !== 0 || !probed.stdout?.includes('4.3')) return { ok: false, launched: true, detail: version || `exit ${probed.status}` };
+  return { ok: true, version: probed.stdout.trim() };
+}
 
 function ctx(engine: TemplateContext['engine']): TemplateContext {
   return {
@@ -24,17 +59,7 @@ function ctx(engine: TemplateContext['engine']): TemplateContext {
   };
 }
 
-test('Unity generated IAP matches official 5.4.2 StoreController signatures', async () => {
-  const source = await readFile('/tmp/appops-v4-sdk-review.JVhp3D/unity-iap/package/Runtime/Purchasing/Core/StoreController.cs', 'utf8');
-  const orderInfo = await readFile('/tmp/appops-v4-sdk-review.JVhp3D/unity-iap/package/Runtime/Purchasing/Core/Purchasing/Models/Interfaces/IOrderInfo.cs', 'utf8');
-  assert.match(source, /void FetchProducts\(List<ProductDefinition>/);
-  assert.match(source, /event Action<Orders>\? OnPurchasesFetched/);
-  assert.match(source, /event Action<PurchasesFetchFailureDescription>\? OnPurchasesFetchFailed/);
-  assert.match(source, /void FetchPurchases\(\)/);
-  assert.match(source, /void RestoreTransactions\(Action<bool, string\?>/);
-  assert.match(source, /void ConfirmPurchase\(PendingOrder order\)/);
-  assert.doesNotMatch(source, /void Acknowledge\(/);
-  assert.match(orderInfo, /string TransactionID \{ get; \}/);
+test('Unity generated IAP calls the pinned StoreController methods', () => {
   const plan = planUnity(ctx('unity'), new Map([
     ['ProjectSettings/ProjectVersion.txt', 'm_EditorVersion: 2022.3\n'],
     ['Packages/manifest.json', '{ "dependencies": {} }'],
@@ -48,12 +73,25 @@ test('Unity generated IAP matches official 5.4.2 StoreController signatures', as
   assert.match(generated, /RestoreTransactions\(\(ok, error\)/);
 });
 
-test('Unity MAX binder uses the pinned 8.6.5 public typed settings API', async () => {
-  const source = await readFile('/tmp/appops-v4-sdk-review.JVhp3D/max-unity/ebc0ba1b5ef6b4a6b9dd53d7eadfea16/asset', 'utf8');
-  assert.match(source, /public class AppLovinSettings : ScriptableObject/);
-  assert.match(source, /public static AppLovinSettings Instance/);
-  assert.match(source, /public string SdkKey/);
-  assert.match(source, /public void SaveAsync\(\)/);
+test('official Unity IAP 5.4.2 StoreController source matches the pinned signatures', async (t) => {
+  const root = sdkReviewRoot();
+  const texts = await officialTexts(t, 'APPOPS_SDK_REVIEW_ROOT', [
+    join(root, 'unity-iap/package/Runtime/Purchasing/Core/StoreController.cs'),
+    join(root, 'unity-iap/package/Runtime/Purchasing/Core/Purchasing/Models/Interfaces/IOrderInfo.cs'),
+  ]);
+  if (!texts) return;
+  const [source, orderInfo] = texts;
+  assert.match(source!, /void FetchProducts\(List<ProductDefinition>/);
+  assert.match(source!, /event Action<Orders>\? OnPurchasesFetched/);
+  assert.match(source!, /event Action<PurchasesFetchFailureDescription>\? OnPurchasesFetchFailed/);
+  assert.match(source!, /void FetchPurchases\(\)/);
+  assert.match(source!, /void RestoreTransactions\(Action<bool, string\?>/);
+  assert.match(source!, /void ConfirmPurchase\(PendingOrder order\)/);
+  assert.doesNotMatch(source!, /void Acknowledge\(/);
+  assert.match(orderInfo!, /string TransactionID \{ get; \}/);
+});
+
+test('Unity generated MAX binder uses the pinned settings API', () => {
   const plan = planUnity({
     ...ctx('unity'),
     provider: 'applovin-max',
@@ -70,20 +108,47 @@ test('Unity MAX binder uses the pinned 8.6.5 public typed settings API', async (
   assert.match(binder, /settings\.SaveAsync\(\)/);
 });
 
+test('official Unity MAX 8.6.5 settings source matches the pinned public API', async (t) => {
+  const texts = await officialTexts(t, 'APPOPS_SDK_REVIEW_ROOT', [
+    join(sdkReviewRoot(), 'max-unity/ebc0ba1b5ef6b4a6b9dd53d7eadfea16/asset'),
+  ]);
+  if (!texts) return;
+  const source = texts[0]!;
+  assert.match(source, /public class AppLovinSettings : ScriptableObject/);
+  assert.match(source, /public static AppLovinSettings Instance/);
+  assert.match(source, /public string SdkKey/);
+  assert.match(source, /public void SaveAsync\(\)/);
+});
+
+function generatedBilling(): string {
+  return planAndroid(ctx('android'), new Map([
+    ['app/build.gradle', 'dependencies {\n}\n'],
+    ['app/src/main/AndroidManifest.xml', '<manifest><application></application></manifest>\n'],
+  ])).changes.find((item) => item.path.endsWith('AppOpsBilling.kt'))?.content ?? '';
+}
+
+test('generated Android billing source calls Play Billing query and acknowledge APIs', () => {
+  const kt = generatedBilling();
+  assert.match(kt, /queryProductDetailsAsync/);
+  assert.match(kt, /queryResult\.productDetailsList/);
+  assert.match(kt, /acknowledgePurchase\(AcknowledgePurchaseParams\.newBuilder\(\)\.setPurchaseToken\(purchaseToken\)\.build\(\)\)/);
+});
+
 test('Android billing calls compile against official Play Billing 9.1.0 classes.jar', async (t) => {
+  const configured = explicitEnv('APPOPS_BILLING_JAR');
+  const jar = configured ?? join(sdkReviewRoot(), 'billing/classes.jar');
+  const explicit = configured !== undefined || explicitEnv('APPOPS_SDK_REVIEW_ROOT') !== undefined;
+  try { await access(jar); } catch (error) {
+    if (explicit || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    t.skip(`Play Billing classes.jar 가 없습니다: ${jar}. node --import tsx scripts/prepare-verification-tools.ts 로 준비하거나 APPOPS_BILLING_JAR로 지정할 수 있습니다.`);
+    return;
+  }
   const dir = await mkdtemp(join(tmpdir(), 'appops-javac-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   await mkdir(join(dir, 'android/app'), { recursive: true });
   await mkdir(join(dir, 'android/content'), { recursive: true });
   await writeFile(join(dir, 'android/content/Context.java'), 'package android.content; public class Context {}\n');
   await writeFile(join(dir, 'android/app/Activity.java'), 'package android.app; public class Activity extends android.content.Context {}\n');
-  const plan = planAndroid(ctx('android'), new Map([
-    ['app/build.gradle', 'dependencies {\n}\n'],
-    ['app/src/main/AndroidManifest.xml', '<manifest><application></application></manifest>\n'],
-  ]));
-  const kt = plan.changes.find((item) => item.path.endsWith('AppOpsBilling.kt'))?.content ?? '';
-  assert.match(kt, /queryProductDetailsAsync/);
-  assert.match(kt, /queryResult\.productDetailsList/);
   const java = `import android.app.Activity;
 import com.android.billingclient.api.*;
 public class ApiCheck {
@@ -102,7 +167,7 @@ public class ApiCheck {
 `;
   await writeFile(join(dir, 'ApiCheck.java'), java);
   const javac = spawnSync('javac', [
-    '-classpath', `/tmp/appops-v4-sdk-review.JVhp3D/billing/classes.jar:${dir}`,
+    '-classpath', `${jar}${process.platform === 'win32' ? ';' : ':'}${dir}`,
     '-d', dir,
     join(dir, 'android/content/Context.java'),
     join(dir, 'android/app/Activity.java'),
@@ -111,10 +176,49 @@ public class ApiCheck {
   assert.equal(javac.status, 0, javac.stderr || javac.stdout);
 });
 
-test('Godot 4.3 parses the generated Billing 3.3.0 bridge against its public script contract', async (t) => {
-  const godot = '/tmp/appops-godot-verification-20260911/downloads/Godot_v4.3-stable_linux.x86_64';
-  if (!spawnSync(godot, ['--version'], { encoding: 'utf8' }).stdout.includes('4.3')) {
-    t.skip('downloaded Godot 4.3 verification binary is unavailable');
+function generatedGodotBilling(): string {
+  return planGodot({
+    ...ctx('godot'),
+    provider: 'play-billing',
+    adUnits: [],
+    products: [
+      { productId: 'coins_100', productType: 'consumable' },
+      { productId: 'premium', productType: 'nonConsumable' },
+      { productId: 'season_pass', productType: 'subs' },
+    ],
+  }, new Map([
+    ['project.godot', '[application]\nconfig/name="AppOps Billing Compile"\n'],
+    ['addons/GodotGooglePlayBilling/plugin.cfg', '[plugin]\nname="GodotGooglePlayBilling"\n'],
+  ])).changes.find((item) => item.path.endsWith('app_ops_billing.gd'))?.content ?? '';
+}
+
+test('generated Godot billing bridge calls the Billing 3.3 public script contract', () => {
+  const generated = generatedGodotBilling();
+  assert.match(generated, /query_product_details\(PackedStringArray\(INAPP_IDS\)/);
+  assert.match(generated, /query_product_details\(PackedStringArray\(SUBS_IDS\)/);
+  assert.match(generated, /purchase_subscription\(/);
+  assert.match(generated, /consume_purchase\(/);
+  assert.match(generated, /acknowledge_purchase\(/);
+  assert.match(generated, /query_purchases\(BillingClient\.ProductType\.INAPP\)/);
+});
+
+test('Godot 4.3 parses the generated Billing 3.3.0 bridge against its public script contract', { timeout: 180_000 }, async (t) => {
+  const configured = explicitEnv('APPOPS_GODOT');
+  let candidate = configured;
+  if (!candidate) {
+    try { candidate = godotBinaryFor(repoRoot); }
+    catch (error) {
+      if (error instanceof AppError && error.code === 'INSTALL_PLATFORM') {
+        t.skip(error.message);
+        return;
+      }
+      throw error;
+    }
+  }
+  const probed = probeGodot(candidate);
+  if (!probed.ok) {
+    if (configured !== undefined || probed.launched) assert.fail(`Godot 4.3으로 실행하지 못했습니다 (${candidate}: ${probed.detail}).`);
+    t.skip(`Godot 4.3 검증 바이너리가 없습니다: ${candidate} (${probed.detail}). node --import tsx scripts/prepare-verification-tools.ts 로 이 호스트용 4.3을 준비하거나 APPOPS_GODOT로 지정할 수 있습니다.`);
     return;
   }
   const dir = await mkdtemp(join(tmpdir(), 'appops-godot-billing-'));
@@ -136,22 +240,8 @@ func purchase_subscription(_product_id: String, _base_plan_id: String, _offer_id
 func consume_purchase(_purchase_token: String) -> void: pass
 func acknowledge_purchase(_purchase_token: String) -> void: pass
 `);
-  const plan = planGodot({
-    ...ctx('godot'),
-    provider: 'play-billing',
-    adUnits: [],
-    products: [
-      { productId: 'coins_100', productType: 'consumable' },
-      { productId: 'premium', productType: 'nonConsumable' },
-      { productId: 'season_pass', productType: 'subs' },
-    ],
-  }, new Map([
-    ['project.godot', '[application]\nconfig/name="AppOps Billing Compile"\n'],
-    ['addons/GodotGooglePlayBilling/plugin.cfg', '[plugin]\nname="GodotGooglePlayBilling"\n'],
-  ]));
-  const generated = plan.changes.find((item) => item.path.endsWith('app_ops_billing.gd'))?.content ?? '';
-  await writeFile(join(dir, 'AppOpsBilling.gd'), generated);
-  const check = spawnSync(godot, ['--headless', '--editor', '--path', dir, '--quit'], { encoding: 'utf8' });
+  await writeFile(join(dir, 'AppOpsBilling.gd'), generatedGodotBilling());
+  const check = spawnSync(candidate, ['--headless', '--editor', '--path', dir, '--quit'], { encoding: 'utf8' });
   const output = `${check.stdout}\n${check.stderr}`;
   assert.equal(check.status, 0, output);
   assert.doesNotMatch(output, /SCRIPT ERROR|Parse Error|Failed to load script/);

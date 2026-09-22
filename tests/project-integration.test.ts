@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,7 +18,7 @@ const applyIntegration=(input:Parameters<typeof rawApply>[0])=>withIntegrationSt
 const rollbackIntegration=(id:string,root:string)=>withIntegrationStorage(root,root+'.state',()=>rawRollback(id,root));
 
 async function tempDir(t: { after: (fn: () => void | Promise<void>) => void }, prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), prefix)));
   t.after(async () => { await rm(dir, { recursive: true, force: true }); await rm(dir+'.state', { recursive: true, force: true }); });
   return dir;
 }

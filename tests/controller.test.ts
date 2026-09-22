@@ -1,6 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -248,7 +248,7 @@ test('symlinked controller data roots cannot be registered through their real pa
   await writeFile(join(root, 'project/project.godot'), 'config_version=5');
   const controller = await startController({ directory: join(root, 'data-alias'), port: 0, connectors: [], scanToolchains: async () => [] });
   t.after(async () => { await controller.close(); await rm(root, { recursive: true, force: true }); });
-  assert.equal(controller.directory, join(root, 'project/data'));
+  assert.equal(controller.directory, await realpath(join(root, 'project/data')));
   await assert.rejects(controller.service.addProject({ path: join(root, 'project') }), { code: 'PROTECTED_DIRECTORY' });
 });
 test('unresolved external effects keep their account and project available for reconciliation', async t => {

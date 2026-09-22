@@ -1,6 +1,6 @@
 import test,{type TestContext} from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startController } from '../apps/controller/server.js';
@@ -26,10 +26,10 @@ async function fixture(t:TestContext){
 
 test('tool settings persist per service and untrusted managedRoot or data roots cannot be saved',async t=>{
  const f=await fixture(t);const sdk=join(f.root,'public-sdk');await mkdir(sdk);
- await f.api('/setup/tools','PUT',{androidSdk:sdk});assert.equal(f.scans.at(-1)?.androidSdk,sdk);assert.equal(f.scans.at(-1)?.managedRoot,join(f.root,'data.tools'));
+ await f.api('/setup/tools','PUT',{androidSdk:sdk});assert.equal(f.scans.at(-1)?.androidSdk,await realpath(sdk));assert.equal(f.scans.at(-1)?.managedRoot,(await realpath(join(f.root,'data')))+'.tools');
  assert.equal((await f.raw('/setup/tools','PUT',{managedRoot:'/'})).status,400);
  assert.equal((await f.raw('/setup/tools','PUT',{androidSdk:join(f.root,'data')})).status,400);
- await f.restart();assert.equal((await f.api<PreparationState>('/setup')).settings.androidSdk,sdk);
+ await f.restart();assert.equal((await f.api<PreparationState>('/setup')).settings.androidSdk,await realpath(sdk));
  assert.equal((await f.api<PreparationState>('/demo/setup')).settings.androidSdk,undefined);
 });
 

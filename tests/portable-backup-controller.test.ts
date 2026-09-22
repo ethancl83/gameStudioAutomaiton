@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -14,7 +14,7 @@ import type { PortableBackupState } from '../packages/backup/types.js';
 import type { Connector } from '../packages/connectors/types.js';
 
 async function fixture(t:{after(fn:()=>Promise<void>):void}){
-  const root=await mkdtemp(join(tmpdir(),'appops-backup-api-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const root=await realpath(await mkdtemp(join(tmpdir(),'appops-backup-api-')));t.after(()=>rm(root,{recursive:true,force:true}));
   const keys=new Map<string,Buffer>();
   const provider=(account='legacy'):KeyProvider=>({name:'test-slots',getKey:async()=>keys.get(account),setKey:async key=>{keys.set(account,Buffer.from(key));}});
   const vault=(directory:string)=>new CredentialVault(directory,{keyProvider:new DirectoryKeyProvider(directory,provider)});

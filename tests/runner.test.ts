@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSnapshot, executeBuild, probeIsolation } from '../apps/runner/index.js';
-import type { BuildPlan, CommandSpec } from '../packages/domain/index.js';
+import type { BuildOutput, BuildPlan, CommandSpec } from '../packages/domain/index.js';
 
 async function tempDir(t: { after: (fn: () => void | Promise<void>) => void }, prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -35,6 +35,13 @@ function planWith(command: CommandSpec, expectedArtifacts: string[], outputPath:
     expectedArtifacts,
     findings: [],
   };
+}
+
+/** Process mechanics run under bwrap when it exists. Without a verified backend, use the same injected launcher as the path tests. */
+async function mechanicOptions(extra: { signal?: AbortSignal; onOutput?: (output: BuildOutput) => void } = {}) {
+  if ((await probeIsolation()).available) return extra;
+  const prefixArgs: string[] = [];
+  return { ...extra, isolation: { launcher: { executable: process.execPath, prefixArgs } } };
 }
 
 test('snapshot preserves restrictive wrapper executability and requires every build artifact', async t => {
@@ -145,7 +152,7 @@ console.log('ok', process.argv.slice(2).join(','));
     cwd: root,
     env: { ARTIFACT_PATH: artifact },
     label: 'fake godot',
-  }, [artifact], join(root, 'out')));
+  }, [artifact], join(root, 'out')), await mechanicOptions());
   assert.equal(result.exitCode, 0);
   assert.equal(result.cancelled, false);
   assert.deepEqual(result.artifacts, [artifact]);
@@ -156,7 +163,7 @@ console.log('ok', process.argv.slice(2).join(','));
     args: ['--version'],
     cwd: root,
     label: 'missing',
-  }, [artifact], join(root, 'out')));
+  }, [artifact], join(root, 'out')), await mechanicOptions());
   assert.notEqual(missing.exitCode, 0);
   assert.equal(missing.cancelled, false);
   assert.deepEqual(missing.artifacts, []);
@@ -171,7 +178,7 @@ process.exit(0);
     args: [],
     cwd: root,
     label: 'empty',
-  }, [ghost], join(root, 'out')));
+  }, [ghost], join(root, 'out')), await mechanicOptions());
   assert.equal(fakeSuccess.exitCode, 1);
   assert.deepEqual(fakeSuccess.artifacts, []);
 });
@@ -187,7 +194,7 @@ process.exit(2);
     args: [],
     cwd: root,
     label: 'fail',
-  }, [join(root, 'out.bin')], root));
+  }, [join(root, 'out.bin')], root), await mechanicOptions());
   assert.equal(result.exitCode, 2);
   assert.equal(result.cancelled, false);
   assert.deepEqual(result.artifacts, []);
@@ -208,7 +215,7 @@ setInterval(() => { fs.writeFileSync(beat, String(Date.now())); }, 40);
     cwd: root,
     env: { BEAT: beat },
     label: 'sleeper',
-  }, [], root), { signal: controller.signal });
+  }, [], root), await mechanicOptions({ signal: controller.signal }));
   const started = Date.now();
   for (let i = 0; i < 80; i++) {
     try {
@@ -247,9 +254,9 @@ main();
     args: [],
     cwd: root,
     label: 'noisy',
-  }, [], root), {
+  }, [], root), await mechanicOptions({
     onOutput: (o) => chunks.push(o.text),
-  });
+  }));
   assert.equal(result.exitCode, 0);
   const joined = chunks.join('');
   assert.ok(joined.includes('잘렸습니다'));
@@ -264,18 +271,11 @@ console.log(JSON.stringify(process.argv.slice(2)));
     args: ['a; rm -rf /', 'hello world'],
     cwd: root,
     label: 'args',
-  }, [], root), { onOutput: (o) => { if (o.stream === 'stdout') captured.push(o.text); } });
+  }, [], root), await mechanicOptions({ onOutput: (o) => { if (o.stream === 'stdout') captured.push(o.text); } }));
   assert.equal(captured.join('').trim(), JSON.stringify(['a; rm -rf /', 'hello world']));
 });
 
-test('bwrap isolation hides host files and fail-closed when unavailable', async (t) => {
-  const probe = await probeIsolation();
-  if (process.platform === 'linux') {
-    assert.equal(probe.available, true);
-    assert.equal(probe.backend, 'bwrap');
-  } else {
-    assert.equal(probe.available, false);
-  }
+async function hostPeeker(t: { after: (fn: () => void | Promise<void>) => void }) {
   const root = await tempDir(t, 'appops-jail-');
   const source = join(root, 'src');
   await mkdir(source);
@@ -293,21 +293,43 @@ try {
   process.exit(0);
 }
 `);
+  return { source, tool };
+}
+
+test('bwrap isolation hides host files', async (t) => {
+  const probe = await probeIsolation();
+  if (process.platform === 'linux') {
+    assert.equal(probe.available, true);
+    assert.equal(probe.backend, 'bwrap');
+  } else if (!probe.available) {
+    t.skip(probe.reason ?? '검증된 빌드 격리가 없어 호스트 파일 은닉을 실행하지 않습니다.');
+    return;
+  }
+  const { source, tool } = await hostPeeker(t);
+  const logs: string[] = [];
   const isolated = await executeBuild(planWith({
-    executable: tool,
-    args: [],
-    cwd: source,
-    label: 'peeker',
-  }, [], source));
+    executable: tool, args: [], cwd: source, label: 'peeker',
+  }, [], source), { onOutput: (o) => logs.push(o.text) });
+  const text = logs.join('');
   assert.equal(isolated.exitCode, 0);
   assert.equal(isolated.cancelled, false);
+  assert.match(text, /BLOCKED/);
+  assert.equal(text.includes('SHOULD_NOT_READ') || text.includes('LEAK'), false);
+});
 
-  const closed = await executeBuild(planWith({
-    executable: tool,
-    args: [],
-    cwd: source,
-    label: 'peeker',
-  }, [], source), { isolation: { forceUnavailable: true } });
+test('executeBuild fail-closes instead of running without isolation', async (t) => {
+  const probe = await probeIsolation();
+  const { source, tool } = await hostPeeker(t);
+  const plan = () => planWith({ executable: tool, args: [], cwd: source, label: 'peeker' }, [], source);
+  if (!probe.available) {
+    const logs: string[] = [];
+    const isolated = await executeBuild(plan(), { onOutput: (o) => logs.push(o.text) });
+    const text = logs.join('');
+    assert.equal(isolated.exitCode, 1);
+    assert.match(text, /격리/);
+    assert.equal(text.includes('SHOULD_NOT_READ') || text.includes('LEAK'), false);
+  }
+  const closed = await executeBuild(plan(), { isolation: { forceUnavailable: true } });
   assert.equal(closed.exitCode, 1);
   assert.deepEqual(closed.artifacts, []);
 });

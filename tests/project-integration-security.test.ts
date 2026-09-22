@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { applyIntegration, previewIntegration, rollbackIntegration, recoverIncomplete, withIntegrationStorage, type IntegrationRequest } from '../packages/project-integration/index.js';
 import { readJournal, writeJournal } from '../packages/project-integration/journal.js';
 
 async function fixture(t:test.TestContext){
- const dir=await mkdtemp(join(tmpdir(),'appops-sdk-safety-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const dir=await realpath(await mkdtemp(join(tmpdir(),'appops-sdk-safety-')));t.after(()=>rm(dir,{recursive:true,force:true}));
  const root=join(dir,'project'),storage=join(dir,'controller','sdk');await mkdir(join(root,'app/src/main'),{recursive:true});
  await writeFile(join(root,'settings.gradle'),"include ':app'\n");
  await writeFile(join(root,'app/build.gradle'),"plugins { id 'com.android.application' }\nandroid { namespace 'com.appops.demo' }\ndependencies { }\n");

@@ -321,10 +321,11 @@ export async function downloadVerified(request: DownloadRequest): Promise<Downlo
   return {bytes, sha256, sha512, url};
 }
 
-function tarPath(name: string): string {
+function tarPath(name: string, allowUnwrittenAppleDouble = false): string {
   while (name.startsWith('./')) name = name.slice(2);
   if (!name || name.length > 2048 || name.includes('\\') || name.includes('\0') || name.startsWith('/')
-    || /^[A-Za-z]:/.test(name) || name.split('/').some(part => !part || part === '..' || part === '.' || /[. ]$/.test(part)
+    || /^[A-Za-z]:/.test(name) || name.split('/').some(part => !part || part === '..' || part === '.'
+      || (/[. ]$/.test(part) && !(allowUnwrittenAppleDouble && part.startsWith('._')))
       || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))
     || /[<>:"|?*\x00-\x1f]/.test(name)) {
     throw new AppError('UNSAFE_ARCHIVE', '압축 파일에 안전하지 않은 경로가 있습니다.');
@@ -504,7 +505,11 @@ export async function extractTarGz(archivePath: string, destination: string, sig
       const directory = header.type === '5' || header.name.endsWith('/');
       longName = null; pax = {};
       if ((rawName === '.' || rawName === '') && directory && fileSize === 0) continue;
-      const name = tarPath(rawName);
+      let probe = rawName;
+      while (probe.startsWith('./')) probe = probe.slice(2);
+      const baseName = probe.split('/').filter(Boolean).at(-1) ?? '';
+      const appleDouble = (header.type === '0' || header.type === '\0') && !directory && !isLink && baseName.startsWith('._');
+      const name = tarPath(rawName, appleDouble);
       const normalized = name.normalize('NFC').toLowerCase();
       if (!normalized || seen.has(normalized)) throw new AppError('UNSAFE_ARCHIVE', '중복 경로가 있는 압축 파일입니다.');
       seen.add(normalized);
@@ -513,6 +518,12 @@ export async function extractTarGz(archivePath: string, destination: string, sig
       const output = resolve(root, name);
       const rel = relative(root, output);
       if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new AppError('UNSAFE_ARCHIVE', '설치 경로를 벗어나는 항목입니다.');
+      // AppleDouble sidecars are metadata. Limits above still apply; the file is not written.
+      if (appleDouble) {
+        if (fileSize) current = {kind:'skip', remaining: fileSize, pad};
+        else if (pad) current = {kind:'skip', remaining: pad, pad: 0};
+        continue;
+      }
       if (isLink) {
         const targetName = header.linkname;
         if (fileSize !== 0 || !targetName || targetName.includes('\\') || /[<>:"|?*\x00-\x1f]/.test(targetName) || isAbsolute(targetName)) {
