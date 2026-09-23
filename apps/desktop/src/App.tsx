@@ -6,7 +6,9 @@ import {
   AlertOctagon,
   BadgeDollarSign,
   ClipboardCheck,
+  FolderGit2,
   FolderKanban,
+  Globe,
   History,
   LayoutDashboard,
   Megaphone,
@@ -36,6 +38,8 @@ import { SetupView } from './views/SetupView';
 import { OperationNotifications } from './components/OperationNotifications';
 import { HistoryView } from './views/HistoryView';
 import { SettingsView } from './views/SettingsView';
+import { DevelopmentView } from './views/DevelopmentView';
+import { WebDeploymentsView } from './views/WebDeploymentsView';
 import { ModeControl } from './components/ModeControl';
 import { AgentPanel } from './components/AgentPanel';
 import { AgentActions } from './components/AgentActions';
@@ -55,7 +59,9 @@ export type ViewKey =
   | 'community'
   | 'operations'
   | 'history'
-  | 'settings';
+  | 'settings'
+  | 'development'
+  | 'web-deployments';
 
 interface NavDef {
   key: ViewKey;
@@ -87,6 +93,8 @@ const NAV: NavDef[] = [
     desc: '폴더 등록·검수·빌드 실행과 실행 정책',
     count: (s) => s.projects.length,
   },
+  { key: 'development', label: '개발 작업', icon: FolderGit2, desc: 'Git 관리 · GitHub 이슈/PR 가져오기 · 개발 문서 · 터미널 · AI 구현과 반영 승인' },
+  { key: 'web-deployments', label: '웹 배포', icon: Globe, desc: '커밋한 소스를 Vercel·Netlify에 Preview·Production으로 배포' },
   {
     key: 'connections',
     label: '계정 연결',
@@ -139,9 +147,9 @@ const NAV: NavDef[] = [
   },
   {
     key: 'settings',
-    label: '환경·정책',
+    label: '설정',
     icon: Settings2,
-    desc: '런타임·보관함·도구 체인·연동 기능 설정',
+    desc: '앱 내부 AI·로그인·모델·런타임·보관함 설정',
   },
 ];
 
@@ -347,6 +355,8 @@ function ViewRouter({
   }
 
   switch (view) {
+    case 'development': return <DevelopmentView state={state} refresh={refresh} goTo={goTo} />;
+    case 'web-deployments': return <WebDeploymentsView state={state} goTo={goTo} />;
     case 'agent':
       return <AgentPanel state={state} onRegister={() => goTo('projects')} />;
     case 'dashboard':

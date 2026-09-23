@@ -63,6 +63,12 @@ test('full snapshot restores WAL history, effects, files and credentials, fencin
   await vault.set('store-account',{refreshToken:'fixture-refresh',privateKey:'fixture-signing-key'});
   const project:Project={id:'project-one',name:'Restored game',rootPath:join(root,'external-source'),engine:'godot',engineVersion:'4.3',targets:['linux'],appIdentifier:'com.example.restore',findings:[],inspectedAt:new Date().toISOString(),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),policy:{...DEFAULT_POLICY,autoBuild:true,autoRelease:true,allowedConnectionIds:['store-account']}};
   store.put('project',project.id,project);
+  const developmentId='11111111-1111-4111-8111-111111111111';
+  const managed=join(store.directory,'development',developmentId,'worktree');await mkdir(managed,{recursive:true});await writeFile(join(managed,'change.txt'),'recoverable change');await writeFile(join(managed,'.git'),'gitdir: /external/metadata');
+  await mkdir(join(store.directory,'development',developmentId,'analyze','cli'),{recursive:true});await writeFile(join(store.directory,'development',developmentId,'analyze','cli','auth.json'),'private-cli-token-fixture');
+  store.put('development-task',developmentId,{id:developmentId,projectId:project.id,status:'ready',worktree:managed,terminalId:'old-terminal',verifiedFingerprint:'old-hash',verifiedCommand:'npm test'});
+  store.put('web-deployment','web-fixture',{id:'web-fixture',projectId:project.id,status:'action_required',resolved:true,terminalId:'old-terminal'});
+  store.put('development-gitdir',developmentId,{path:'/external/metadata'});store.put('settings',`development:${project.id}`,{autoImplement:true,autoCommit:true,autoPush:true,testCommand:'npm test'});
   store.put('connection','store-account',{id:'store-account',status:'connected',lastCheckedAt:'2026-09-11'});
   store.put('settings','tool-settings',{javaHome:'/old/jdk'});store.put('settings','tool-installations',[{id:'install-old',status:'installing'}]);
   const run=store.createRun({kind:'upload-build',connectionId:'store-account',projectId:project.id,label:'Fixture release',input:{appId:'123'},writeEffect:true,idempotencyKey:'backup_fixture_request'});
@@ -76,6 +82,9 @@ test('full snapshot restores WAL history, effects, files and credentials, fencin
   const summary=await restorePortableSnapshot(archive,password,stage,target,{vaultFactory:p.vault});
   assert.equal(summary.projects,1);assert.equal(summary.credentials,1);
   assert.equal(await readFile(join(stage,'artifacts/run-one/game.bin'),'utf8'),'immutable artifact');
+  assert.equal(await readFile(join(stage,'restored-history','development',developmentId,'change.txt'),'utf8'),'recoverable change');
+  await assert.rejects(readFile(join(stage,'restored-history','development',developmentId,'.git')));
+  await assert.rejects(readFile(join(stage,'development',developmentId,'analyze','cli','auth.json')));
   assert.deepEqual(await p.vault(join(stage,'credentials')).get('store-account'),{refreshToken:'fixture-refresh',privateKey:'fixture-signing-key'});
   assert.equal(await readFile(join(target,'credentials/key-slot.json'),'utf8'),oldSlot);assert.deepEqual(await oldVault.get('existing'),{token:'existing-target-secret'});
   const db=new DatabaseSync(join(stage,'operations.sqlite'));try{
@@ -85,6 +94,10 @@ test('full snapshot restores WAL history, effects, files and credentials, fencin
     const restored=JSON.parse(String(db.prepare("SELECT payload FROM documents WHERE kind='project'").get()!.payload));assert.equal(restored.relinkRequired,true);assert.equal(restored.policy.autoBuild,false);assert.equal(restored.policy.autoRelease,false);
     assert.equal(JSON.parse(String(db.prepare("SELECT payload FROM documents WHERE kind='pipeline'").get()!.payload)).restoredPaused,true);
     assert.deepEqual(JSON.parse(String(db.prepare("SELECT payload FROM documents WHERE kind='settings' AND id='tool-settings'").get()!.payload)),{});
+    const devTask=JSON.parse(String(db.prepare("SELECT payload FROM documents WHERE kind='development-task'").get()!.payload));assert.equal(devTask.restored,true);assert.equal(devTask.status,'action_required');assert.equal(devTask.verifiedFingerprint,undefined);assert.equal(devTask.terminalId,undefined);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM documents WHERE kind='development-gitdir'").get()!.n,0);
+    const restoredDeploy=JSON.parse(String(db.prepare("SELECT payload FROM documents WHERE kind='web-deployment'").get()!.payload));assert.equal(restoredDeploy.resolved,false);
+    const devPolicy=JSON.parse(String(db.prepare("SELECT payload FROM documents WHERE kind='settings' AND id=?").get(`development:${project.id}`)!.payload));assert.equal(devPolicy.autoPush,false);assert.equal(devPolicy.autoCommit,false);assert.equal(devPolicy.autoImplement,false);
     assert.equal(db.prepare('SELECT dedupe_key FROM runs WHERE id=?').get(run.id)!.dedupe_key,'backup_fixture_request');
   }finally{db.close();}
 });

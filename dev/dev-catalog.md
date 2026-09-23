@@ -12,9 +12,11 @@ Last Updated: 2026-09-24
 
 ## 진행
 
-### 앱 출시·마케팅·수익화·커뮤니티 통합 자동화 개발계획 `19/61 (31%)`
+### 앱 출시·마케팅·수익화·커뮤니티 통합 자동화 개발계획 `38/84 (45%)`
 
-[`app-operations-platform`](active/app-operations-platform/app-operations-platform-plan-v9.md) · 생성일 `2026-09-11` · 태스크 수정일 `2026-09-24` · v1~v8 승계. v9 앱 종료 시 프로세스 정리 완료, 기존 장기 수용 조건 진행 중. 체크리스트 완수율이며 제품 구현률이 아니다.
+[`app-operations-platform`](active/app-operations-platform/app-operations-platform-plan-v11.md) · 생성일 `2026-09-11` · 태스크 수정일 `2026-09-24`
+
+2026-09-24: v11 CLI AI 설정·Git/GitHub·tmux 개발 작업·웹 배포 구현과 독립 리뷰 수정 완료. 실제 CLI/MCP·native 대화 재개, 로컬/fixture 검사와 macOS 패키지를 확인했다. 새 23개 중 실계정·OS 수용 4개는 남기며 기존 장기 수용 42개도 유지한다. [사용법과 제한](../docs/ai-operations.md). 아래는 이전 검증 이력이다.
 
 최근 체크포인트(2026-09-22): Grok 워커의 macOS 검사 안정화·CLI/MCP 기본 진단 구현 완료. 통합 452 통과·실패 0·환경 skip 16, 타입·빌드 및 독립 리뷰 완료. 실계정·다른 OS·장기 수용은 남아 있다.
 

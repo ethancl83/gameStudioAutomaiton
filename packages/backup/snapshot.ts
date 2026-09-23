@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, lstat, open, readdir, realpath, rm, type FileHan
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { CredentialVault, type Credentials } from '../credentials/index.js';
 import { AppError } from '../domain/errors.js';
+import type { DevelopmentTask } from '../development/types.js';
 import type { Store } from '../storage/index.js';
 import { BACKUP_LIMITS, backupPath, readBackup, writeBackup, type BackupEntry } from './archive.js';
 
@@ -24,6 +25,28 @@ async function collect(root:string,directory:string):Promise<{path:string;file:s
   }return files;
 }
 
+// Worktree Git metadata points outside the backup. Preserve source and documents
+// as recovery files, never the runner's copied CLI authentication or dependencies.
+async function collectDevelopment(store:Store):Promise<{path:string;file:string}[]> {
+  const files:{path:string;file:string}[]=[];
+  for(const task of store.list<DevelopmentTask>('development-task')) {
+    if(!/^[a-f0-9-]{36}$/.test(task.id))continue;
+    const source=join(store.directory,'development',task.id,'worktree');
+    async function walk(directory:string):Promise<void>{
+      const items=await readdir(directory,{withFileTypes:true}).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
+      for(const item of items){
+        if(['.git','node_modules'].includes(item.name))continue;
+        const file=join(directory,item.name);const st=await lstat(file);
+        if(st.isSymbolicLink()||await realpath(file)!==file)throw new AppError('BACKUP_UNSAFE_FILE','개발 작업 백업에 심볼릭 링크가 있습니다. 확인 후 다시 백업하세요.');
+        if(st.isDirectory())await walk(file);
+        else if(st.isFile())files.push({path:`restored-history/development/${task.id}/${relative(source,file).split(sep).join('/')}`,file});
+      }
+    }
+    await walk(source);
+  }
+  return files;
+}
+
 /** Call while controller mutations and background jobs are quiescent. SQLite's
  * online backup captures WAL state; vault records only enter encrypted frames. */
 export async function createPortableSnapshot(store:Store,vault:CredentialVault,destination:string,password:string,mode:'demo'|'live'='live',options:{signal?:AbortSignal}={}):Promise<PortableBackupSummary>{
@@ -32,6 +55,7 @@ export async function createPortableSnapshot(store:Store,vault:CredentialVault,d
     options.signal?.throwIfAborted();
     const db=join(work,'operations.sqlite');await backup(store.db,db,{rate:100,progress:()=>options.signal?.throwIfAborted()});
     const files:{path:string;file:string}[]=[];for(const name of DATA_ROOTS)files.push(...await collect(store.directory,join(store.directory,name)));
+    files.push(...await collectDevelopment(store));
     const records=await vault.snapshotRecords();const credentialIds=Object.keys(records).sort();
     const manifest:Manifest={schema:1,version:'0.1.0',mode,createdAt:new Date().toISOString(),sourceDirectory:store.directory,fileCount:files.length+1,credentialCount:credentialIds.length};
     async function* entries():AsyncGenerator<BackupEntry>{
@@ -110,7 +134,16 @@ function fenceDatabase(path:string,manifest:Manifest,target:string):number{
         }else if(kind==='runner'){value.status='unverified';delete value.lastCheckedAt;delete value.toolchains;delete value.isolationBackend;
         }else if(kind==='social-schedule'&&['scheduled','queued'].includes(String(value.status))){value.status='cancelled';value.restoredPaused=true;
         }else if(kind==='pipeline'&&!['succeeded','failed','cancelled'].includes(String(value.status))){value.status='action_required';value.restoredPaused=true;value.error='복원 후 배포 이력을 확인해 주세요.';
+        }else if(kind==='development-task'){
+          value.restored=true;value.status='action_required';value.worktree=join(target,'restored-history','development',id);
+          value.message='백업의 개발 소스·문서를 복원했습니다. 원본 프로젝트를 연결하고 이슈를 다시 가져와 새 작업을 시작하세요.';
+          delete value.terminalId;delete value.verifiedFingerprint;delete value.verifiedCommand;
+        }else if(kind==='development-gitdir'){
+          db.prepare('DELETE FROM documents WHERE kind=? AND id=?').run(kind,id);continue;
+        }else if(kind==='web-deployment'){
+          value.status='action_required';value.resolved=false;value.terminalId='';value.message='복원한 배포입니다. 서비스에서 커밋과 배포 결과를 확인하세요.';
         }else if(kind==='settings'){
+          if(id.startsWith('development:'))for(const key of Object.keys(value))if(key.startsWith('auto')&&typeof value[key]==='boolean')value[key]=false;
           if(id==='operations-settings')value.autoBackup=false;
           if(id==='tool-settings'){for(const key of Object.keys(value))delete value[key];}
           if(id.startsWith('preparation:')){delete value.runnerId;}

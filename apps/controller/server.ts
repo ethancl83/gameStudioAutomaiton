@@ -170,6 +170,7 @@ export async function startController(options: ControllerOptions = {}): Promise<
         } finally { resettingDemo = false; }
       }
       else if (method === 'GET' && path === '/api/state') data = await activeService.state();
+      else if (method === 'POST' && path === '/api/development') data = await activeService.development.action(body);
       else if (method === 'GET' && path === '/api/agent') data = await activeService.agent.state();
       else if (method === 'PUT' && path === '/api/agent/settings') data = activeService.agent.saveSettings(body);
       else if (method === 'POST' && path === '/api/agent/requests') data = activeService.agent.request(body);

@@ -1,3 +1,4 @@
+import { AiSettings } from '../components/AiSettings';
 // 환경·정책: 런타임, 보안 보관함, 도구 체인, 연동 기능(capabilities)을 표시한다.
 // 실행 정책(자동화 범위)은 프로젝트별로 프로젝트 상세의 정책 탭에서 저장한다.
 import {
@@ -27,6 +28,7 @@ export function SettingsView({ state, refresh }: { state: AppState; refresh: () 
 
   return (
     <div className="stack">
+      <AiSettings />
       <div className="grid grid--cards">
         <Card title="런타임" icon={Info}>
           <dl className="dl" style={{ gridTemplateColumns: '120px 1fr' }}>

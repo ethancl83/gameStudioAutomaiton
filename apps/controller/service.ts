@@ -1,3 +1,4 @@
+import { DevelopmentStudio } from './development.js';
 import { GOOGLE_OAUTH_APP_ID, OAUTH_PROVIDERS, oauthCredentials, resolveOAuthClient } from './oauth-clients.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { PortableBackups } from './portable-backups.js';
@@ -57,6 +58,7 @@ export interface ServiceOptions {
 
 export class AppService {
   readonly agent: ProjectAgent;
+  readonly development: DevelopmentStudio;
   readonly queue: JobQueue;
   readonly scheduler: AutomationScheduler;
   readonly buildKeys: BuildKeyManager;
@@ -84,7 +86,7 @@ export class AppService {
     this.mutations++;let released=false;return()=>{if(!released){released=true;this.mutations--;}};
   }
   async withMaintenance<T>(task:()=>Promise<T>,retain=false):Promise<T>{
-    if(this.maintenance||this.mutations>1||this.locks.size||this.queue.activeCount||this.agent.busy||this.store.list<Project>('project').some(p=>this.integrations.isBusy(p.id))||this.preparation.isInstalling())throw new AppError('MAINTENANCE_BUSY','진행 중인 작업이나 설치가 끝난 뒤 백업·복구를 시작해 주세요.',409);
+    if(this.maintenance||this.mutations>1||this.locks.size||this.queue.activeCount||this.agent.busy||this.development.busy||this.store.list<Project>('project').some(p=>this.integrations.isBusy(p.id))||this.preparation.isInstalling())throw new AppError('MAINTENANCE_BUSY','진행 중인 작업이나 설치가 끝난 뒤 백업·복구를 시작해 주세요.',409);
     this.maintenance=true;this.queue.pause();this.pipelines.stop();
     let keep=false;
     try{await this.scheduler.stop();await this.operations.stop();const result=await task();keep=retain;return result;}
@@ -97,6 +99,7 @@ export class AppService {
 
   constructor(readonly store: Store, readonly vault: CredentialVault, private readonly options: ServiceOptions = {}) {
     this.agent = new ProjectAgent(this, options.mode ?? 'live', options.agent);
+    this.development = new DevelopmentStudio(this, options.mode ?? 'live');
     this.connectors = options.connectors ?? builtinConnectors;
     this.buildKeys = new BuildKeyManager(store, vault);
     this.operations = new Operations(store, this, options.mode ?? 'live');
@@ -115,6 +118,7 @@ export class AppService {
   }
   async start(): Promise<void> {
     this.agent.recover();
+    await this.development.recover();
     await this.buildKeys.cleanup();
     await this.recoverConnectionCommits();
     await this.integrations.recover();
@@ -130,7 +134,7 @@ export class AppService {
     this.pipelines.stop();
     // 각 종료 함수가 먼저 타이머/프로세스를 중지한다. AI 종료를 기다리는 동안
     // 큐나 스케줄러가 다음 작업을 시작하지 않도록 모두 함께 중지한다.
-    const results = await Promise.allSettled([this.agent.close(), this.backups.close(), this.preparation.close(), this.operations.stop(), this.scheduler.stop(), this.queue.stop()]);
+    const results = await Promise.allSettled([this.development.close(), this.agent.close(), this.backups.close(), this.preparation.close(), this.operations.stop(), this.scheduler.stop(), this.queue.stop()]);
     const failure = results.find(result => result.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
   }
@@ -185,7 +189,7 @@ export class AppService {
     if (!connector) throw new AppError('PROVIDER_UNAVAILABLE', '아직 실행 가능한 연결 모듈이 없습니다.');
     return connector;
   }
-  private project(id: string): Project {
+  project(id: string): Project {
     const project = this.store.get<Project>('project', id);
     if (!project) throw new AppError('NOT_FOUND', '프로젝트를 찾을 수 없습니다.', 404);
     return project;
@@ -266,6 +270,7 @@ export class AppService {
     return updated;
   }
   async removeProject(id: string): Promise<{ deleted: true }> {
+    if (this.development.tasks.list().some(task => task.projectId === id)) throw new AppError('DEVELOPMENT_TASKS_EXIST', '개발 작업과 worktree가 연결되어 있습니다. 작업 자료를 정리한 뒤 프로젝트를 제거하세요.');
     if (!this.project(id).relinkRequired) this.integrations.assertAvailable(id);
     this.project(id);
     this.requireResolvedEffects(run => run.projectId === id);

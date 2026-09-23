@@ -1,5 +1,7 @@
 export type AgentProvider = 'codex' | 'opencode';
-export interface AgentSettings { provider: AgentProvider | 'auto' }
+export type AgentPurpose = 'analysis' | 'coding' | 'review' | 'operations';
+export interface AgentChoice { provider: AgentProvider | 'auto'; model?: string }
+export interface AgentSettings extends AgentChoice { purposes?: Partial<Record<AgentPurpose, AgentChoice>> }
 export interface AgentRuntime { provider: AgentProvider; executable: string | null }
 export interface AgentListing {
   title: string;
@@ -21,6 +23,8 @@ export interface AgentTask {
   id: string;
   projectId: string | null;
   provider: AgentProvider | null;
+  model?: string;
+  settingsPinned?: boolean;
   sessionId?: string;
   sessionStarted?: boolean;
   sessionGeneration: string;
@@ -35,6 +39,6 @@ export interface AgentTask {
   createdAt: string;
   updatedAt: string;
 }
-export type AgentScreen = 'agent' | 'dashboard' | 'setup' | 'projects' | 'connections' | 'releases' | 'marketing' | 'monetization' | 'community' | 'operations' | 'history' | 'settings';
+export type AgentScreen = 'agent' | 'dashboard' | 'setup' | 'projects' | 'connections' | 'releases' | 'marketing' | 'monetization' | 'community' | 'operations' | 'history' | 'settings' | 'development' | 'web-deployments';
 export interface AgentRequestContext { screen: AgentScreen; projectId?: string; connectionId?: string }
 export interface AgentState { settings: AgentSettings; runtimes: AgentRuntime[]; tasks: AgentTask[] }

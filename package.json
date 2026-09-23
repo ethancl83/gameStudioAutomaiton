@@ -18,18 +18,24 @@
     "build": "tsc -p tsconfig.node.json && node scripts/build-preload.mjs && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "node scripts/test.mjs",
-    "pack": "npm run build && electron-builder --dir --config electron-builder.json",
-    "dist": "npm run build && electron-builder --config electron-builder.json",
+    "pack": "npm run build && electron-builder --dir --config electron-builder.config.cjs",
+    "dist": "npm run build && electron-builder --config electron-builder.config.cjs",
     "verify:godot": "tsx scripts/verify-godot.ts",
-    "runner": "tsx apps/runner/remote-main.ts"
+    "runner": "tsx apps/runner/remote-main.ts",
+    "postinstall": "node scripts/prepare-pty.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.77",
     "@napi-rs/keyring": "2.0.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "fflate": "0.8.3",
     "lucide-react": "1.44.0",
+    "node-pty": "1.1.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "sharp": "0.35.4"
+    "sharp": "0.35.4",
+    "undici": "7.29.1"
   },
   "devDependencies": {
     "@types/node": "22.20.2",
@@ -48,5 +54,8 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sphacker83/gameStudioAutomaiton.git"
+  },
+  "allowScripts": {
+    "node-pty@1.1.0": true
   }
 }

@@ -2,13 +2,17 @@
 
 Last Updated: 2026-09-24
 
+2026-09-24 구현: CLI AI 설정·GitHub 개발 작업·tmux·검증/승인 반영·웹 배포 화면과 런타임을 구현했다. 독립 리뷰 수정과 로컬/fixture·macOS 패키지 검증을 완료했다. 신규 OAuth 동의·실계정 push/PR/배포·Linux 이번 변경 실기는 미완료 수용 조건으로 유지한다. [사용법](../../../docs/ai-operations.md) · [검증](../../../docs/verification.md#2026-09-24-cli-ai-설정github-개발-작업웹-배포).
+
+2026-09-24 신규 계획: [v11](app-operations-platform-plan-v11.md)에 앱 내부 AI 설정·Git/GitHub·이슈/PR 가져오기·tmux·Dev Docs·자동 구현/반영·Netlify/Vercel 배포를 통합했다. 사용자가 CLI 로그인 중심을 확정하고 구현을 승인했다. Phase 16부터 진행하며 완료 근거를 확보한 작업만 체크한다. 새 계획의 첫 구현 후보는 T-16.1이다. 기존 완료 19개와 장기 수용 미완료 42개를 유지하며 전체는 22개 Phase, 84개 작업이다.
+
 2026-09-24 후속: Google 공통 OAuth 등록과 실제 Electron 계정 검사·조회 완료. 앱에서 Ads 고객 ID 정정·검사, Seed2 재검수, Seed2/SEED3 출시 조회 성공. Ads 관리자 동기화 결함 수정 후 하위 계정 1개·캠페인 12개·광고비 행 0개를 앱 이력과 목록에서 확인했다. 집중 회귀 75/75·타입·빌드 통과. 새 OAuth 동의 전체 재실행과 외부 쓰기는 수행하지 않았다. [근거](../../../docs/verification.md#2026-09-23-google-공통-앱-등록실계정-접근-검사).
 
 2026-09-23 후속 완료: 운영준비 탭/도구 상태·파일 선택, 공급자 아이콘 버튼, OAuth 앱 재사용/JSON 입력과 Play·AdMob 계정 자동 확인, 하위 프로젝트 탐색 및 Godot 정상 템플릿 경고 제거, Godot 4.7.2 카탈로그, 실제 Android ZIP 해제 결함 수정. 전체 493 통과/15 환경 skip/실패 0, 타입·빌드·Electron 화면·공식 도구 다운로드 검증. Android SDK 구성 요소 전체 설치·다른 OS 검증은 완료로 간주하지 않는다. Google 공통 등록과 실제 조회 후속 결과는 위 최신 기록을 따른다. [근거](../../../docs/verification.md#2026-09-23-운영준비프로젝트-탐색oauth-ux). 장기 수용 체크리스트와 유효 plan은 유지한다.
 
 프로젝트명: `gameStudioAutomaiton`. 2026-09-12 사용자 지시로 앱 표시명·패키지 이름을 통일하고 `sphacker83/gameStudioAutomaiton` 비공개 저장소로 관리한다. 이름 변경 타입 검사·컴파일·패키징 메타데이터 검증 통과. 기존 개발계획 파일명은 참조 이력으로 보존한다.
 
-유효 기준선: [개발계획 v9](app-operations-platform-plan-v9.md), [v8](app-operations-platform-plan-v8.md), [v7](app-operations-platform-plan-v7.md), [v6](app-operations-platform-plan-v6.md), [v5](app-operations-platform-plan-v5.md), [v4](app-operations-platform-plan-v4.md), [v3](app-operations-platform-plan-v3.md), [v2](app-operations-platform-plan-v2.md), [승계한 v1](app-operations-platform-plan.md). 진행 맥락: [작업 맥락](app-operations-platform-context.md). 15개 Phase, 61개 작업이며 문서 3개·v3 통합 5개·실사용 후속 수정 6개·AI 요청 5개, 총 19개를 완료했다. 나머지 42개는 실서비스·OS·장기 수용 조건까지 포함하며 코드 구현률을 뜻하지 않는다.
+유효 기준선: [개발계획 v10](app-operations-platform-plan-v11.md). [v9](app-operations-platform-plan-v9.md) 종료 계약과 [v8](app-operations-platform-plan-v8.md) 일반 AI 요청 계약을 승계한다. v1–v7은 이전 범위의 이력이다. 진행 맥락: [작업 맥락](app-operations-platform-context.md). 22개 Phase, 84개 작업 중 문서 3개·v3 통합 5개·실사용 후속 수정 6개·AI 요청 5개, 총 19개 완료다. 기존 장기 수용 42개와 v10 예정 구현 23개는 미완료이며 이 수치는 코드 구현률을 뜻하지 않는다.
 
 Phase 1의 문서 고정 뒤 사용자 지시로 구현을 진행 중이다. 체크 표시는 해당 작업의 전체 산출물·검증 계약이 완료됐다는 뜻이며 코드 생성만으로 체크하지 않는다. 구현 중 경로는 [구현 계약](../../../docs/implementation-contract.md)과 context의 체크포인트를 따른다. 각 작업의 완료 조건은 해당 Phase의 Acceptance Criteria와 V-* 검증 계약을 함께 적용한다. 최근 검증은 [검증 기록](../../../docs/verification.md), [이력·복구 계약](../../../docs/workflow-contract.md), [운영 정책](../../../docs/automation-policies.md), [지표 정의](../../../docs/metric-definitions.md)에 기록한다.
 
@@ -383,3 +387,97 @@ Acceptance: [v5](app-operations-platform-plan-v5.md)의 이번 완료 조건을 
 2026-09-13 요청 수정: [v8](app-operations-platform-plan-v8.md)에 따라 버튼은 기존 채팅만 열고, 서버는 실제 메시지 없는 실행을 거부한다. 새 요청 흐름은 사용자가 재설계한다. AI 19/19·데스크톱 23/23·타입·빌드와 12개 화면의 무실행을 확인했다. [검증](../../../docs/verification.md#2026-09-13-ai-요청-자동-전송-제거) · [사용법](../../../docs/ai-operations.md).
 
 검증: AI/Electron 관련 25/25, 타입·빌드 통과. 전체 451개 중 409 통과·36 실패·6 skip이며 깨끗한 HEAD의 36개 실패와 동일하다. 실서비스 검증으로 표시하지 않는다. 실제 Electron은 별도 DB·CLI 대역으로 버튼/대화/resume/clear/이미지를 확인했다. [상세 결과](../../../docs/verification-assets/ai-requests-20260913.md) · [사용법](../../../docs/ai-operations.md). 2차 기능은 [별도 기획](../ai-growth-operations/ai-growth-operations-plan-v2.md)으로만 전달했다. 기존 실계정·OS·장기 수용 42개는 유지한다.
+
+## Phase 16 — 설정과 앱 내부 AI 연결 [상태: 완료]
+
+기준: [v11 Phase 16](app-operations-platform-plan-v11.md).
+
+- [x] T-16.1 AI 설정·실행 권한 계약과 초기 공급자 범위 고정
+
+- [x] T-16.2 AI 프로필·보관함·기존 설정 이관
+
+- [x] T-16.3 CLI 실행·모델 조회·capability 검사
+
+- [x] T-16.4 설정 화면·용도별 기본값·기존 대화 통합
+
+## Phase 17 — Git 관리와 GitHub 연결 [상태: 진행 중]
+
+기준: [v11 Phase 17](app-operations-platform-plan-v11.md).
+
+- [ ] T-17.1 CLI OAuth·GitHub 권한 연결 실계정 수용
+  - 목표: 공식 GitHub CLI OAuth·GitHub 권한 연결의 실계정 수용.
+  - 의존성: T-16.1 및 시험 GitHub 계정·저장소.
+  - 완료 조건: 수동 토큰 복사 없는 실제 로그인·저장소 선택·취소/철회/재연결 확인.
+
+- [x] T-17.2 Git 명령·credential 전달·저장소 잠금
+
+- [x] T-17.3 GitHub 저장소·이슈·PR 조회와 가져오기 저장
+
+- [x] T-17.4 Git·이슈/PR 목록·계정 연결 화면
+
+## Phase 18 — 개발 작업 공간과 tmux 터미널 [상태: 완료]
+
+기준: [v11 Phase 18](app-operations-platform-plan-v11.md).
+
+- [x] T-18.1 작업별 worktree·tmux·PTY 생성과 수명주기
+
+- [x] T-18.2 작업 상세 터미널 입력·출력·resize·재접속
+
+- [x] T-18.3 앱 종료·작업 취소·소유권과 비정상 종료 복구
+
+## Phase 19 — 이슈 분석과 Dev Docs 생성 [상태: 완료]
+
+기준: [v11 Phase 19](app-operations-platform-plan-v11.md).
+
+- [x] T-19.1 저장소 지침·이슈/PR 자료 수집과 스냅샷
+
+- [x] T-19.2 AI 분석·plan/context/tasks 생성과 갱신
+
+- [x] T-19.3 문서·계획 UI와 가져오기 자동 분석 연결
+
+## Phase 20 — 자동 구현·검증·승인·커밋·푸시 [상태: 완료]
+
+기준: [v11 Phase 20](app-operations-platform-plan-v11.md).
+
+- [x] T-20.1 CLI 작업 runner·도구 경계·수정/검증 루프
+
+- [x] T-20.2 정책·수동 승인·커밋/푸시·PR 반영
+
+- [x] T-20.3 체크포인트·외부 결과 재조정·상태 화면
+
+## Phase 21 — Netlify·Vercel 웹 배포 [상태: 진행 중]
+
+기준: [v11 Phase 21](app-operations-platform-plan-v11.md).
+
+- [x] T-21.1 웹 프로젝트 감지·팀/프로젝트 매핑·설정 화면
+
+- [ ] T-21.2 두 공급자 OAuth·배포·로그/URL 조회
+  - 목표: 두 공급자 OAuth·배포·로그/URL 조회.
+  - 의존성: T-21.1 및 서비스 CLI 로그인·시험 프로젝트 준비.
+  - 완료 조건: Netlify·Vercel 각각 로그인→연결→실제 Preview URL·재연결·오류 확인.
+
+- [x] T-21.3 Git 연동·중복 방지·Production 승인/복구
+
+## Phase 22 — 통합 수용·패키징·사용 안내 [상태: 진행 중]
+
+기준: [v11 Phase 22](app-operations-platform-plan-v11.md).
+
+- [ ] T-22.1 데모/실제 전체 사용자 경로와 회귀 검사
+  - 목표: 데모/실제 전체 사용자 경로와 회귀 검사.
+  - 의존성: T-16–21 완료.
+  - 완료 조건: 설정→가져오기→문서/터미널→구현/검증→승인/자동 반영→배포의 실제 동작 확인.
+
+- [ ] T-22.2 OS·패키징·인증/실행/복구 경계 수용
+  - 목표: OS·패키징·인증/실행/복구 경계 수용.
+  - 의존성: T-22.1 및 패키징 설정 삭제 상태 해결.
+  - 완료 조건: macOS/Linux Electron·PTY·tmux 검증과 타입/전체 테스트/빌드/pack, 미검증 OS 구분.
+
+- [x] T-22.3 기존 사용법·지원 범위·검증 기록 동기화
+
+
+### 남은 실계정·OS 수용 (T-17.1 / T-21.2 / T-22.1–2)
+
+- 구현은 완료했고 실계정 외부 반영 검증은 수행하지 않았다. 시험용 저장소·사이트와 명시적 외부 쓰기 승인 범위가 정해지면 신규 CLI OAuth 동의→재연결→시험 이슈/PR→Preview 경로를 확인한다.
+- macOS 패키지의 실제 PTY·격리는 통과했다. Linux 호스트에 tmux/bubblewrap/socat을 준비하고 같은 런타임 및 Electron 검증을 실행한다. Windows AI 개발 작업은 지원 범위 밖이다.
+- 실행 근거: `tests/development*.test.ts`, `tests/web-deployments.test.ts`, `scripts/verify-desktop-development.mjs`, `tmp/development-workflow/`.
+- 문서 반영: 실계정·OS별 증거를 `docs/verification.md`와 이 tasks/context에 갱신한다. 기존 계획 파일은 유지한다.

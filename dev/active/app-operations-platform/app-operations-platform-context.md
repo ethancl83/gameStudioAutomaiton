@@ -8,6 +8,30 @@ Last Updated: 2026-09-24
 
 ## Current Execution Contract
 
+- 유효 plan: [v11 — AI 설정·GitHub 개발 작업·웹 배포](app-operations-platform-plan-v11.md). v1–v9 이력과 기존 장기 수용 범위를 승계한다.
+- Active Phase: Phase 22 — 통합 검증·패키징·사용 안내. 구현 완료, 실계정·Linux 수용 별도.
+- Active Task: T-17.1·T-21.2·T-22.1–2의 실계정 OAuth·외부 반영·Linux 수용.
+- 완료 조건: 설정→Git/GitHub→가져오기/문서→tmux 구현/리뷰/검증→승인/자동 반영→웹 배포를 구현하고 행동 테스트·실제 Electron·패키지·독립 리뷰로 검증한다. 실계정 외부 쓰기와 Linux 실기는 별도 수용 조건이다.
+- 금지 사항: 구현은 사용자 승인 범위다. 사용자 실계정 push·배포를 테스트 명목으로 수행하지 않는다. 비밀 출력, 기존 plan 덮어쓰기, 기존 변경 삭제를 하지 않는다. 제품의 자동화 체크 옵션은 현재 세션 외부 쓰기 승인이 아니다.
+
+## 빠른 재개 안내
+
+- 먼저 `git status --short`로 변경을 확인한다. 계획 작성 전부터 `electron-builder.json` 삭제와 `.DS_Store` 미추적 상태가 있었으며 보존했다.
+- v11 구현과 독립 리뷰 수정을 완료했다. 실행법은 `docs/ai-operations.md`, 검사 증거는 `docs/verification.md`의 2026-09-24 CLI 항목과 `tmp/development-workflow/`를 확인한다. 실계정 쓰기는 수행하지 않았다.
+- 후속 수용에 필요한 입력: 시험 GitHub 저장소·Netlify/Vercel 프로젝트와 실제 외부 반영 승인 범위. CLI 공식 OAuth를 사용하므로 앱 자체 callback 서버/클라이언트 비밀 입력은 필요하지 않다. OpenCode 기존 기본 모델 ox-alpha는 목록에 없어 설정의 모델 선택이 필요하다.
+- 가정: 관리하는 웹 프로젝트 배포. 사용자가 CLI 로그인 중심을 확정했다. Codex/OpenCode를 유지하고 직접 AI API 어댑터는 초기 범위에서 제외한다.
+- 수명주기: 터미널 패널 닫기는 detach, 앱 종료는 v9대로 소유 작업 정리. 실행 중 설정 변경은 새 작업부터 적용한다.
+- 지원 제한: fork/출처 불명 PR의 원본 저장소 반영 차단, 변경된 Git filter/eol 파일은 수동 Git 처리, Netlify 정적 npm 빌드만 지원. import 순간 크래시로 생긴 고아 worktree 자동 알림은 없다. 기존 실계정·타 OS·장기 수용 미완료는 유지한다.
+
+## 다음 세션 읽기 순서
+
+1. 이 파일의 현재 계약·빠른 재개 안내·최신 SESSION PROGRESS.
+2. [v11](app-operations-platform-plan-v11.md)의 승인·Phase 17/21/22 수용 조건.
+3. [tasks](app-operations-platform-tasks.md)의 남은 실계정·OS 수용 블록.
+4. 해당 코드와 공식 문서, 기존 AI 운영/인증/작업 복구 문서. 이전 구현 이력은 필요한 부분만 확인한다.
+
+## 이전 구현 계약과 근거 — 2026-09-22까지의 이력
+
 - 최신 체크포인트 완료(2026-09-22): Mac→Docker Linux Godot 빌드·Mac 결과물 회수·Linux 격리 게임 실행과 Mac SSH/Android 키 등록·AAB/JAR 서명·SSH fetch를 실측했다. 최종 소스 500개 검사에서 Mac 485 통과/15 skip, Linux 491 통과/9 skip, 양쪽 실패 0·타입·빌드 통과. 최종 이미지의 실제 키·daemon·큐/API 통합 26/26 통과. 이미지 context 53파일이 현재 소스와 일치한다. [근거와 사용법](../../../docs/verification.md#2026-09-22-macos-dockerlinux-실행과-sdk-이식성).
 - 독립 리뷰 해소: SDK `ctx_dbcce36ce12a`의 명시 SDK 루트 누락 skip 결함은 회귀 14/14. Docker A/B `ctx_099fae02d0a1`의 daemon 전환 정리 오인과 큐/API 정리·commit 기록 소실 2건은 daemon pin 회귀 3/3, 소비자 31/31·취소 영향 52/52 및 최종 통합 26/26으로 해소했다. 기존 외부 쓰기 취소 fencing은 유지하고 실행 중 build만 정리를 기다린다. 제한된 GUI PATH의 실제 SSH 양성·암호 음성도 통과. 생성한 Grok/Astra 워커 터미널은 모두 정확히 종료하고 release/ack했다. 커밋·푸시·실서비스 변경은 하지 않았다.
 - 2026-09-22 워커 지정 변경 이력: 사용자가 `gpt astra ultra fast`를 명시했다. 진행 중 Grok 터미널 3개는 fence 후 정확한 터미널 종료(`ptyKilled`)와 release를 확인했고 Docker 설계와 완료 SDK 코드를 인계했다. 새 Codex CLI의 실제 실행 화면에서 `gpt-6-astra ultra fast`를 확인했다. 같은 Run의 독립 설계 검토 `task_d6c7baa905ac / ctx_1d41950a44ea`, Docker 구성 `task_22350a24a5ed`, 키 helper `task_1057e284f74c`를 새 지정으로 완료했다. 아래 Grok 기록은 이전 단계 이력이다.
@@ -42,6 +66,15 @@ Last Updated: 2026-09-24
 - 금지 사항: 모의/데모 결과를 실서비스 검증으로 표시하지 않는다. 사용자 비밀 탐색·검증용 외부 배포/게시/광고 집행·고정 계획 덮어쓰기 금지. 개발 검증 당시에는 Git 저장소가 없었다. 이후 사용자 커밋·푸시 요청으로 main 저장소를 초기화했다. 최신 커밋·원격 상태는 git status/log/remote로 확인한다. 미리보기 인증 정보는 출력하지 않는다. 이번 후속 수정은 root가 단독 수행했다.
 
 ## SESSION PROGRESS
+
+### 2026-09-24 — CLI AI 설정·GitHub 개발 작업·웹 배포 구현
+
+- 완료: 설정의 용도별 CLI/모델·로그인, Git/GitHub 목록/가져오기, 작업별 원본/Dev Docs·tmux 터미널, 구현/독립 리뷰/검증/승인 반영, Netlify/Vercel CLI 연결·배포·결과 재조정. v10 계획 이력을 보존하고 v11 CLI 중심 확정을 적용했다.
+- 팀: Opus 5.5/high UI와 독립 backend 리뷰, Sol 6/high backend 및 독립 runtime/UI 리뷰, root 통합. 모든 차단 리뷰 항목은 관련 동작 회귀로 해소했다. 새 전체 리뷰를 반복하지 않았다.
+- 복구 비용이 큰 결정: CLI 전용 인증 폴더·전역 MCP/plugin 미상속·scoped MCP proxy; macOS Keychain IPC 추가 거부; OpenCode는 auth+public 모델 cache/version만 복사하고 native 세션별 export/import. tmux 전용 socket과 prefix 비활성·live redaction. Git import raw 기준선+streaming fingerprint로 CRLF/LFS 원본 보존, 승인 SHA 고정.
+- 검증: 전체 548개(533 통과/15 환경 skip/실패 0)·typecheck·build·macOS pack, 실제 Electron 20개+기존 모드 6개, 실제 두 CLI 모델/MCP/resume·OpenCode 세션 이관 통과. 실제 Codex 로컬 이슈의 Dev Docs→수정→독립 리뷰→테스트→승인 커밋까지 확인했다. 패키지의 native PTY/sandbox 명령도 확인했다. 정확한 최신 수치는 `docs/verification.md`를 따른다.
+- 문서: 기존 `docs/ai-operations.md`와 `docs/verification.md`, tasks/context/catalog를 갱신. 커밋·실계정 push/PR/배포는 하지 않았다. 사용자 `electron-builder.json` 삭제를 유지하며 `electron-builder.config.cjs`로 실행 설정을 명시했다.
+- 다음: 실계정·Linux 수용만 필요한 계정/승인 범위 안에서 진행한다. 테스트용 모델 호출을 실제 서비스 반영 검증으로 취급하지 않는다.
 
 ### 2026-09-22 — macOS 검사 안정화·CLI/MCP 기본 진단
 
@@ -80,15 +113,7 @@ Last Updated: 2026-09-24
 - 리뷰 워커: Sol high `task_79b7927c57b1 / ctx_466041932928 / term_f25630c6-f25d-49cc-9726-cf5697a3671a`가 다운로드/Apple 스크린샷/네이티브 backup bridge를 read-only로 검토, 보고서 `docs/verification-assets/v4-transfer-review.md` 예정. root의 activation/snapshot/server는 별도 독립 리뷰가 필요하다.
 - 다음: 현재 워커 결과 수용·즉시 재사용/해제, 전체 복원 독립 리뷰, 실제 백업 창/파일 bridge 확인, Gradle 의존성 준비·OS 격리/서명·SDK 검증 연결·남은 스토어 기능, 새 패키지/전체 검증. v3 산출물을 v4 완료품으로 제공하지 않는다.
 
-### 2026-09-11 22:50 KST — 실제 네이티브 앱·공식 JDK 확인, 전체 백업 구현 중
-
-- 실제 앱: 샌드박스 preload의 ESM import 때문에 window.appOps가 없던 P0를 재현했다. `scripts/build-preload.mjs`의 esbuild CommonJS 번들과 `preload.cjs` 경로로 수정한 뒤 실제 Electron 창에서 데모 9계정/5프로젝트와 운영 준비 화면을 확인했다. Node API는 renderer에 노출되지 않는다. [실제 창](../../../docs/verification-assets/v4-native-setup.png). 창 종료 후 controller4321 유지·재실행 인수·데모 중지 거부·실제 모드 명시적 중지/IPC 재시작 성공을 확인했다. 최초 실제 모드 확인 모달을 누르기 전 관찰은 모드 키 오류가 아니었다.
-- 설치: GNU/oldgnu/PAX/ustar, Unicode PAX 바이트 길이/패딩, 내부 JDK 라이선스 링크를 일반 파일로 복사하는 제한 경로, ZIP CRC·Windows 예약 경로 방어를 추가했다. 공식 Temurin21 전체 파일(해시 검증)을 실제 추출하고 java/javac 21.0.12.1 실행에 성공했다. 압축·준비·SDK 보호 17개, 보관함/준비/SDK 보호 35개 집중 검사 통과. `/tmp/appops-real-temurin-result.json`, `/tmp/appops-tar-fixes-tests.log`, `/tmp/appops-v4-core-regression.log`, `/tmp/appops-v4-vault-regression.log`.
-- 보호: SDK 복구 충돌을 영속 차단 상태로 보존하고 빌드/검수/등록 해제를 막는다. 보관함·관리형 도구도 프로젝트/스냅샷 보호 대상이다. 도구는 java/javac·adb/aapt2 실행과 실제 필수 파일로 검사하고, 준비 화면의 도구 매핑/설치 작업 최신 순서를 고쳤다.
-- 수명주기: Opus 수정에 명시적 중지 파일, 자동 시작 인코딩, 실제/데모 IPC 검사, 엄격한 인증·시간 제한이 포함된다. Linux deb 대상과 개발 런처를 추가했다. 현재 release AppImage는 v3 산출물이며 v4로 재빌드/검증해야 한다. OS 자동 시작 등록은 실행하지 않았다.
-- 전체 백업: `packages/backup/archive.ts`의 scrypt/AES-GCM 스트리밍 envelope, `snapshot.ts`의 SQLite online backup·데이터/산출물/메모리 내 보관함 기록·복원 전 작업 차단, 보관함별 OS 키 슬롯을 구현했다. 원본/대상 키 보존·암호 오류/변조/잘림·WAL 이력/산출물/키 복원 3개 집중 검사 통과. **아직 API·UI·오프라인 교체/실패 롤백이 미연결**이며 root가 이어 구현한다. Node 최소 버전은 22.16으로 올렸다. 이 변경은 독립 검토 중이다.
-- SDK 잔여: Sol 후속 리뷰에서 Unreal 결제 4번째 인수/ValidationInfo/공개 헤더, Godot product_ids/구독 base plan, Unity internal Editor 설정 접근, iOS PBX 경로 등 P0가 남았다. [후속 리뷰](../../../docs/verification-assets/v4-sdk-followup-review.md). Grok 템플릿을 반복 성공으로 간주하지 않고 root가 실제 API/소스로 직접 수정한다. 장비 런타임 증거는 없다.
-- 다음: 전체 백업 API·원자적 활성화/롤백·원본 프로젝트 재연결, SDK P0/런타임 구매 검증, OS 빌드 격리·서명, Gradle 준비, 새 deb/AppImage와 전체 회귀/독립 수용을 계속한다. 제공된 채팅 비밀번호는 용도 답변이 없어 사용하거나 저장하지 않았다.
+### 2026-09-11 22:50 KST — 네이티브 앱·JDK·백업 중간 검사; 이후 백업/SDK/수명주기 결과는 위 23:39 및 최신 구현 계약·검증 문서에 보존.
 
 ## 이전 세션 요약
 

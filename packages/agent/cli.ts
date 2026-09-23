@@ -1,13 +1,15 @@
+import { managedCliRoot } from '../development/process.js';
+import { sandboxLaunch, cleanEnvironment } from '../development/sandbox.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { pathLookup } from '../engines/which.js';
-import { AppError } from '../domain/errors.js';
+import { AppError, redact } from '../domain/errors.js';
 import type { AgentProvider, AgentRuntime } from './types.js';
 
 export async function discoverAgentRuntimes(): Promise<AgentRuntime[]> {
-  const dirs = [join(homedir(), '.bun/bin'), join(homedir(), '.local/bin'), join(homedir(), '.opencode/bin'), '/opt/homebrew/bin', '/usr/local/bin'];
+  const dirs = [join(managedCliRoot, 'node_modules/.bin'), join(homedir(), '.bun/bin'), join(homedir(), '.local/bin'), join(homedir(), '.opencode/bin'), '/opt/homebrew/bin', '/usr/local/bin'];
   return Promise.all((['codex', 'opencode'] as const).map(async provider => ({
     provider, executable: await pathLookup(process.platform === 'win32' ? [provider + '.exe', provider] : [provider], dirs),
   })));
@@ -18,6 +20,8 @@ export interface AgentInvocation {
   executable: string;
   directory: string;
   prompt: string;
+  model?: string;
+  isolation?: { controlDirectory: string; readPaths: string[]; denyRead: string[] };
   endpoint: string;
   token: string;
   bridgeCommand: string[];
@@ -29,14 +33,15 @@ export interface AgentInvocation {
 
 export function cliCommand(input: AgentInvocation): { args: string[]; env: NodeJS.ProcessEnv } {
   if (input.sessionId && !validSessionId(input.provider, input.sessionId)) throw new AppError('AGENT_SESSION_INVALID', '저장된 CLI 세션 ID 형식을 확인할 수 없습니다. 클리어하면 새 대화를 시작할 수 있습니다.');
-  const env: NodeJS.ProcessEnv = { ...process.env, APPOPS_AGENT_ENDPOINT: input.endpoint, APPOPS_AGENT_TOKEN: input.token };
+  const env: NodeJS.ProcessEnv = { ...(input.isolation ? cleanEnvironment() : process.env), APPOPS_AGENT_ENDPOINT: input.endpoint, APPOPS_AGENT_TOKEN: input.token };
   // Tokens are inherited by the private MCP process, never interpolated into argv or prompts.
   if (input.provider === 'codex') return {
-    args: ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'workspace-write', '-C', input.directory,
+    args: ['exec', ...(input.model ? ['--model', input.model] : []), '--json', '--skip-git-repo-check', '--sandbox', input.isolation ? 'danger-full-access' : 'workspace-write', '-C', input.directory,
       '-c', 'approval_policy="never"',
+      ...(input.isolation ? ['-c','mcp_servers={}','-c','features.multi_agent=false'] : []),
       '-c', `mcp_servers.appops.command=${JSON.stringify(input.bridgeCommand[0])}`,
       '-c', `mcp_servers.appops.args=${JSON.stringify(input.bridgeCommand.slice(1))}`,
-      '-c', 'mcp_servers.appops.env_vars=["APPOPS_AGENT_ENDPOINT","APPOPS_AGENT_TOKEN"]',
+      '-c', `mcp_servers.appops.env_vars=${JSON.stringify(['APPOPS_AGENT_ENDPOINT','APPOPS_AGENT_TOKEN', ...(input.isolation ? ['HTTP_PROXY','HTTPS_PROXY','APPOPS_AGENT_SANDBOXED','TMPDIR','TSX_DISABLE_CACHE'] : [])])}`,
       '-c', 'mcp_servers.appops.env.ELECTRON_RUN_AS_NODE="1"',
       '-c', 'mcp_servers.appops.required=true', '-c', 'mcp_servers.appops.tool_timeout_sec=120',
       ...(input.sessionId ? ['resume', input.sessionId] : []), '-'], env,
@@ -47,10 +52,10 @@ export function cliCommand(input: AgentInvocation): { args: string[]; env: NodeJ
     catch { throw new AppError('AGENT_CONFIG_INVALID', 'OpenCode의 기존 인라인 설정을 읽을 수 없습니다. CLI 설정을 확인해 주세요.'); }
   }
   return {
-    args: ['run', '--format', 'json', '--dir', input.directory, ...(input.sessionId ? ['--session', input.sessionId] : [])],
+    args: ['run', ...(input.isolation ? ['--pure'] : []), ...(input.model ? ['--model', input.model] : []), '--format', 'json', '--dir', input.directory, ...(input.sessionId ? ['--session', input.sessionId] : [])],
     env: { ...env, OPENCODE_AUTO_SHARE: 'false', OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...previous, share: 'disabled',
       permission: { ...(typeof previous.permission === 'object' ? previous.permission : {}), 'appops_*': 'allow', question: 'deny' },
-      mcp: { ...(typeof previous.mcp === 'object' ? previous.mcp : {}), appops: { type: 'local', command: input.bridgeCommand, enabled: true,
+      mcp: { ...(!input.isolation && typeof previous.mcp === 'object' ? previous.mcp : {}), appops: { type: 'local', command: input.bridgeCommand, enabled: true,
         environment: { ELECTRON_RUN_AS_NODE: '1' } } },
     }) },
   };
@@ -76,8 +81,9 @@ export function cliEvent(provider: AgentProvider, line: string): { sessionId?: s
 export async function runAgentCli(input: AgentInvocation): Promise<void> {
   input.signal.throwIfAborted();
   const { args, env } = cliCommand(input);
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(input.executable, args, { cwd: input.directory, env, shell: false,
+  const launch = input.isolation ? await sandboxLaunch({ directory: input.isolation.controlDirectory, worktree: input.directory, executable: input.executable, args, provider: input.provider, extraRead: input.isolation.readPaths, extraDomains: [new URL(input.endpoint).host], denyRead: input.isolation.denyRead, sessionId: input.sessionId, model: input.model }) : null;
+  try { await new Promise<void>((resolve, reject) => {
+    const child = spawn(launch?.file ?? input.executable, launch?.args ?? args, { cwd: input.directory, env: launch ? { ...launch.env, APPOPS_AGENT_ENDPOINT: input.endpoint, APPOPS_AGENT_TOKEN: input.token, APPOPS_AGENT_SANDBOXED: '1', ...(env.OPENCODE_CONFIG_CONTENT ? { OPENCODE_CONFIG_CONTENT: env.OPENCODE_CONFIG_CONTENT } : {}) } : env, shell: false,
       detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
     let outputBytes = 0;
     let failure: AppError | undefined;
@@ -102,8 +108,12 @@ export async function runAgentCli(input: AgentInvocation): Promise<void> {
           if (sessionId && sessionId !== event.sessionId) throw new AppError('AGENT_SESSION_MISMATCH', 'CLI가 다른 세션을 반환했습니다. 기존 대화를 유지하고 실행을 중단합니다.');
           if (!sessionId) { sessionId = event.sessionId; input.onSessionId?.(sessionId); }
         }
-        if (event.message) input.onMessage?.(event.message.split(input.token).join('[비공개]'));
-        if (event.failed) throw new AppError('AGENT_CLI_FAILED', `${input.provider}가 요청을 완료하지 못했습니다. CLI 로그인·모델·권한 설정을 확인한 뒤 같은 대화에서 재요청해 주세요.`);
+        if (event.message) input.onMessage?.(redact(event.message, [input.token, ...(launch?.secrets ?? [])]));
+        if (event.failed) {
+          const reason=JSON.parse(value)?.error?.data?.message;
+          if(typeof reason==='string'&&reason.startsWith('Model not found:')) throw new AppError('AGENT_MODEL_MISSING', '선택한 모델을 CLI에서 찾을 수 없습니다. 설정의 모델 목록에서 사용 가능한 모델을 선택하세요.');
+          throw new AppError('AGENT_CLI_FAILED', `${input.provider}가 요청을 완료하지 못했습니다. CLI 로그인·모델·권한 설정을 확인한 뒤 같은 대화에서 재요청해 주세요.`);
+        }
       } catch (error) { failure = error instanceof AppError ? error : new AppError('AGENT_EVENT_FAILED', 'AI 대화 기록을 저장하지 못했습니다.'); stop(); }
     };
     child.stdout.on('data', (chunk: Buffer) => {
@@ -130,5 +140,5 @@ export async function runAgentCli(input: AgentInvocation): Promise<void> {
     child.stdin.on('error', () => { /* early CLI exit is handled by close */ });
     child.stdin.end(input.prompt);
     if (input.signal.aborted) stop();
-  });
+  }); } finally { await launch?.cleanup(); }
 }

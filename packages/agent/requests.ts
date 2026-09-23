@@ -13,5 +13,7 @@ export const SCREEN_REQUESTS: Record<AgentScreen, { label: string }> = {
   community: { label: '커뮤니티' },
   operations: { label: '운영·복구' },
   history: { label: '이력' },
-  settings: { label: '환경·정책' },
+  settings: { label: '설정' },
+  development: { label: '개발 작업' },
+  'web-deployments': { label: '웹 배포' },
 };

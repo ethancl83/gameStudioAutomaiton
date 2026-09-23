@@ -102,6 +102,7 @@ function readStoredMode(): RuntimeMode {
 // 전체 새로고침(location.reload)하여 새 인스턴스를 만드므로, 이전 모드의 stale promise가 새 트리로
 // 들어가거나 다른 모드에 쓰기를 보내는 일이 원천적으로 불가능하다.
 export class ApiClient {
+  studio<T = unknown>(action: string, input: Record<string, unknown> = {}) { return this.request<T>('POST', '/development', { ...input, action }); }
   agentState() { return this.request<AgentState>('GET', '/agent'); }
   saveAgentSettings(settings: AgentSettings) { return this.request<AgentSettings>('PUT', '/agent/settings', settings); }
   requestAgent(context: AgentRequestContext & { message: string }) { return this.request<AgentTask>('POST', '/agent/requests', context); }

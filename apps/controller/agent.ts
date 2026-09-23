@@ -1,9 +1,10 @@
+import { agentSettings, agentChoice } from '../../packages/agent/settings.js';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { lstat, mkdir, readFile, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import sharp from 'sharp';
 import type { AppService } from './service.js';
@@ -36,11 +37,10 @@ export class ProjectAgent {
   tasks(): AgentTask[] { return this.service.store.list<AgentTask>('agent-task').filter(task => (!task.projectId || this.service.store.get('project', task.projectId))).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
   async state(): Promise<AgentState> { return { settings: this.settings(), runtimes: this.mode === 'demo' ? [] : await (this.options.discover ?? discoverAgentRuntimes)(), tasks: this.tasks() }; }
   saveSettings(input: unknown) {
-    const provider = object(input).provider;
-    if (!['auto', 'codex', 'opencode'].includes(String(provider))) throw new AppError('INVALID_INPUT', 'Codex 또는 OpenCode를 선택해 주세요.');
-    const settings = { provider } as AgentSettings;
+    const settings = agentSettings(input, this.settings());
     this.service.store.put('settings', 'ai-agent', settings); return settings;
   }
+
   recover() {
     for (const task of this.tasks()) if (['running', 'queued'].includes(task.status)) this.save({ ...task, status: 'needs_user', message: '이전 AI 작업이 중단되었습니다. 저장된 결과와 외부 상태를 확인하며 이어갈 수 있습니다.',
       question: { kind: 'information', message: '이어서 진행하면 이전 작업의 실제 반영 상태부터 확인합니다.' } });
@@ -80,7 +80,7 @@ export class ProjectAgent {
     try {
       this.cancel(id);
       await this.active.get(id)?.promise;
-      const task = { ...this.task(id), provider: null, sessionId: undefined, sessionStarted: false, sessionGeneration: randomUUID(), requestContext: undefined, status: 'idle' as const, conversation: [], question: undefined, message: '대화를 클리어했습니다. 다음 요청은 새 세션에서 시작합니다.', updatedAt: now() };
+      const task = { ...this.task(id), provider: null, model: undefined, settingsPinned: false, sessionId: undefined, sessionStarted: false, sessionGeneration: randomUUID(), requestContext: undefined, status: 'idle' as const, conversation: [], question: undefined, message: '대화를 클리어했습니다. 다음 요청은 새 세션에서 시작합니다.', updatedAt: now() };
       this.service.store.put('agent-task', id, task);
       return task;
     } finally { this.clearing.delete(id); }
@@ -135,14 +135,15 @@ export class ProjectAgent {
       this.save({ ...task, status: 'needs_user', message: '데모에서는 실제 AI CLI와 외부 스토어를 실행하지 않습니다.', question: { kind: 'tooling', message: '실제 운영 모드에서 채팅이나 AI 요청 버튼으로 실행할 수 있습니다.' } }); return;
     }
     const available = await (this.options.discover ?? discoverAgentRuntimes)();
-    const selected = task.provider ?? this.settings().provider;
+    const selectedChoice = agentChoice(this.settings(), 'operations');
+    const selected = task.provider ?? selectedChoice.provider;
     const runtime = available.find(item => item.executable && (selected === 'auto' || selected === item.provider));
     signal.throwIfAborted();
     if (!runtime?.executable) {
       this.save({ ...task, status: 'needs_user', message: '사용할 AI CLI를 찾지 못했습니다.', question: { kind: 'tooling', message: `${selected === 'auto' ? 'Codex 또는 OpenCode' : selected} CLI 설치·로그인을 완료하면 이어서 진행할 수 있습니다.` } }); return;
     }
     const directory = this.directory(task); await mkdir(directory, { recursive: true, mode: 0o700 });
-    task = this.save({ ...task, provider: runtime.provider, status: 'running', question: undefined, message: `${runtime.provider}가 요청을 처리하고 있습니다.` });
+    task = this.save({ ...task, provider: runtime.provider, model: task.settingsPinned || task.sessionStarted ? task.model : selectedChoice.model, settingsPinned: true, status: 'running', question: undefined, message: `${runtime.provider}가 요청을 처리하고 있습니다.` });
     const bridge = await this.bridge(id, signal);
     const module = new URL('../../packages/agent/mcp.js', import.meta.url);
     const bridgeCommand = import.meta.url.endsWith('.ts')
@@ -159,7 +160,7 @@ ${task.conversation.filter(entry => entry.role === 'user').at(-1)?.text ?? ''}`;
       this.save({ ...this.task(id), sessionStarted: true });
       const generation = task.sessionGeneration;
       const current = () => { const saved = this.task(id); return !signal.aborted && saved.sessionGeneration === generation ? saved : null; };
-      await (this.options.run ?? runAgentCli)({ provider: runtime.provider, executable: runtime.executable, directory, prompt, endpoint: bridge.endpoint, token: bridge.token, bridgeCommand, signal, sessionId: task.sessionId,
+      await (this.options.run ?? runAgentCli)({ provider: runtime.provider, model: task.model, executable: runtime.executable, directory, prompt, isolation: { controlDirectory: join(this.service.store.directory, 'agent-sandbox', task.id), readPaths: [fileURLToPath(new URL('../../packages/', import.meta.url)), join(dirname(dirname(dirname(createRequire(import.meta.url).resolve('react/package.json')))), 'package.json'), ...(import.meta.url.endsWith('.ts') ? [fileURLToPath(new URL('../../tsconfig.json', import.meta.url))] : []), dirname(dirname(createRequire(import.meta.url).resolve('react/package.json')))], denyRead: [this.service.store.directory, this.service.vault.directory] }, endpoint: bridge.endpoint, token: bridge.token, bridgeCommand, signal, sessionId: task.sessionId,
         onSessionId: sessionId => { const saved = current(); if (saved) this.save({ ...saved, sessionId }); },
         onMessage: message => {
           const saved = current(); if (!saved) return;

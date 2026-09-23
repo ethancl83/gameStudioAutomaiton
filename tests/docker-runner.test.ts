@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -14,7 +15,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const source = (path: string) => readFile(join(root, path), 'utf8');
 
 test('Electron packages the shared seccomp asset at the helper resources path and preserves application files', async () => {
-  const config = JSON.parse(await source('electron-builder.json'));
+  const config = createRequire(import.meta.url)('../electron-builder.config.cjs');
   assert.deepEqual(config.files, ['dist/**/*', 'package.json', '!dist/**/*.map']);
   const asset = 'docker/runner/seccomp-bwrap.json';
   assert.deepEqual(config.extraResources, [{from: asset, to: asset}]);

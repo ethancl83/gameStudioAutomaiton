@@ -88,7 +88,10 @@ if (process.versions.electron) {
     try {
       process.exitCode = await new Promise((resolve, reject) => {
         child.on('error', reject);
-        child.on('exit', code => resolve(code ?? 1));
+        child.on('exit', (code, signal) => {
+          if (code !== 0) console.error(`Electron 검사 종료: code=${code}, signal=${signal ?? 'none'}`);
+          resolve(code ?? 1);
+        });
       });
     } finally { clearTimeout(timer); }
   } finally {

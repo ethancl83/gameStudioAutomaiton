@@ -23,6 +23,7 @@ interface RouteRule {
 // 구현 계약(docs/implementation-contract.md)의 UI·제어 서비스 계약 표와 1:1로 대응한다.
 // 클라이언트는 '/api' 접두사 없는 논리 경로를 사용하고 transport가 접두사를 붙인다.
 const ROUTES: RouteRule[] = [
+  { method: 'POST', pattern: '/development' },
   { method: 'GET', pattern: '/health' },
   { method: 'GET', pattern: '/state' },
   { method: 'GET', pattern: '/agent' },
@@ -152,6 +153,7 @@ export function isAllowedApiPath(method: string, path: string): boolean {
 // openExternal 허용 호스트. 공급자 콘솔/공식 문서의 설정 링크만 시스템 브라우저로 연다.
 // capability.setupUrl 도메인을 기준으로 하되, 하위 도메인까지 정확 일치/접미사 일치로 검사한다.
 const ALLOWED_EXTERNAL_HOSTS: readonly string[] = [
+  'github.com', 'netlify.com', 'netlify.app', 'vercel.com', 'vercel.app',
   'opencode.ai',
   'chatgpt.com',
   // Google OAuth 동의 화면(시스템 브라우저에서 최초 1회 로그인).

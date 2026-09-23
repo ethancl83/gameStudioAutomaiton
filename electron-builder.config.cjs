@@ -1,0 +1,14 @@
+// Native PTY helpers and the sandbox runner need real executable paths.
+module.exports = {
+  appId: 'local.appops.desktop',
+  productName: 'gameStudioAutomaiton',
+  asar: false,
+  directories: { output: 'release' },
+  files: ['dist/**/*', 'package.json', '!dist/**/*.map'],
+  extraResources: [{ from: 'docker/runner/seccomp-bwrap.json', to: 'docker/runner/seccomp-bwrap.json' }],
+  linux: { target: ['deb', 'AppImage'], category: 'Development', executableName: 'app-operations' },
+  deb: { maintainer: 'gameStudioAutomaiton' },
+  mac: { target: ['dmg'], category: 'public.app-category.developer-tools' },
+  win: { target: ['nsis'] },
+  publish: null,
+};

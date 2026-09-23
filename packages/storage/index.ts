@@ -6,7 +6,7 @@ import { AppError, canonical, prohibitSecrets, redact } from '../domain/errors.j
 import type { Run, RunStatus, TimelineEvent, Severity, HistoryPage, ReleasePipeline } from '../domain/index.js';
 
 type Row = Record<string, unknown>;
-export type DocumentKind = 'project' | 'connection' | 'resource' | 'metric' | 'settings' | 'build-credential' | 'social-schedule' | 'connection-commit' | 'pipeline' | 'runner' | 'media' | 'release-observation' | 'imported-artifact' | 'agent-task';
+export type DocumentKind = 'project' | 'connection' | 'resource' | 'metric' | 'settings' | 'build-credential' | 'social-schedule' | 'connection-commit' | 'pipeline' | 'runner' | 'media' | 'release-observation' | 'imported-artifact' | 'agent-task' | 'development-task' | 'development-gitdir' | 'web-deployment';
 export interface RunInput {
   projectId?: string | null; connectionId?: string | null; kind: string; label: string;
   input: Record<string, unknown>; writeEffect?: boolean; idempotencyKey?: string;

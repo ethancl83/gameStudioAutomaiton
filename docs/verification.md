@@ -169,3 +169,18 @@ Steam 공지 쓰기·신규 앱의 필수 Console 단계, macOS/Windows 내장 �
 - 도구: Codex Computer Use로 계정 검사·고객 ID 수정·Seed2 재검수를 수행했다. Electron 기본 선택 메뉴 입력이 불안정해 이후 Playwright의 동일 Electron 창 UI 조작으로 출시 조회·Ads 동기화·최종 결과를 검증했다. 별도 API probe는 진단용이며 앱 수용 근거로 대체하지 않았다. 최종 앱 창은 사용자가 확인할 수 있도록 열어 두었다.
 - 추가 회귀: controller/engines/transport 44/44, marketing-connectors/marketing-social-extensions/operational-fixes 31/31. 타입·빌드·diff 검사 통과. macOS 실제 UI에서 1360×868 화면의 가로 넘침 없음과 조회 결과를 확인했다. 새 브라우저 OAuth 동의·콜백 전체 재실행, 외부 쓰기, 다른 OS와 Android SDK 전체 구성 요소 설치는 이번 실계정 검사 범위 밖이다.
 - 근거: `tmp/google-live-20260923/regression.log`, `api-disabled.png`, `electron-play-releases.png`, `electron-ads-sync.png`, `electron-ads-campaigns.png`, `app-fixes-tests.log`, `ads-manager-tests.log`; UI QA는 `tmp/operational-fixes-20260923/google-app-*.png`와 `google-app-qa.txt`. 등록 원본 `client_secret_*.json`은 Git 제외 패턴을 추가했으며 비밀값은 출력하지 않았다.
+
+## 2026-09-24 CLI AI 설정·GitHub 개발 작업·웹 배포
+
+사용자가 CLI 로그인 중심을 확정한 뒤 `$ai-team`으로 구현했다. UI는 Claude Code Opus 5.5/high, 개발 백엔드는 Codex Sol 6/high, 통합·격리·배포는 root가 맡았다. 구현 세션과 분리한 Opus 백엔드 리뷰, Sol 런타임/UI 리뷰의 결함을 재현·회귀 검사로 수정했다.
+
+- 새 화면: 개발 작업(Git·이슈/PR·문서·tmux 터미널·승인·자동화), 웹 배포, 설정의 앱 내부 AI.
+- 실제 계정 쓰기 없이 로컬 Git·worktree·PTY·sandbox와 서비스 fixture를 사용했다. GitHub push/PR·Netlify/Vercel 배포·신규 OAuth 동의는 실계정으로 실행하지 않았다.
+- Codex와 OpenCode 실제 모델 → 앱 전용 MCP → native 세션 재개 확인. OpenCode는 전용 XDG 폴더로 해당 세션만 export/import한 뒤 같은 ID 재개도 확인했다. OpenCode 기존 기본값 `openrouter/stealth/ox-alpha`는 현재 목록에 없어 오류를 확인했고, 시험에는 목록에 있는 `openrouter/openai/gpt-6-luna`를 명시했다. 사용자 CLI 설정은 바꾸지 않았다.
+- 실제 Codex 개발 작업: 별도 로컬 fixture worktree에서 원본 이슈 문서→plan/context/tasks 생성→add 함수 오류 수정→새 리뷰 세션+controller diff→npm test→사용자 승인에 해당하는 로컬 commit까지 완료. `live-development-evidence.json`에 단계별 결과를 보관했다. 외부 쓰기는 0건이다.
+- 전체 테스트: 548개 중 533 통과·실패 0·환경 skip 15. 기존 Godot 경로가 4.3을 가리켜 `APPOPS_GODOT="$PWD/tmp/operational-fixes-20260923/live.tools/godot/4.7.2/Godot.app/Contents/MacOS/Godot" npm test`로 설치된 4.7.2를 명시했다.
+- `npm run typecheck`·`npm run build` 통과. 실제 Electron `verify-desktop-development.mjs`에서 프로젝트 전환 경합·조회 전 승인 차단·HEAD 변경·패널 닫힌 로그인/연결 종료·복원 문서·자동 Preview·데모 외부 실행 차단을 포함한 20개 시나리오 통과. 기존 `verify-desktop-mode.mjs` 모드 전환·비신뢰 탐색 차단 6개도 통과.
+- macOS `npm run pack` 통과. 패키지 안의 실제 Electron 실행 파일에서 컴파일된 PTY·sandbox 모듈을 로드해 명령 실행·종료를 확인했다. 서명/공증은 수행하지 않았다.
+- 리뷰 회귀: 종료 직후 취소가 자동 반영을 재개하지 않음, fork PR 반영 제한, CRLF/대형 에셋의 기존 blob 보존, 변경 필터 실행 차단, 정확한 승인 SHA 배포, 보호 URL과 성공 구분, 복원 잠금 재설정, 루트 소스 공개 거부, 실시간 인증값 마스킹, OpenCode 전역 상태 접근 거부, scoped MCP proxy·Keychain/직접 TCP/Unix socket 차단.
+
+증거 로그·실기 스크립트·화면 캡처는 `tmp/development-workflow/`에 보관했다. 공개용 인증 자료와 테스트용 비밀값 이외의 토큰은 로그에 기록하지 않았다. Linux 이번 변경 실기, 실계정 외부 반영, 서명·공증은 별도 수용 항목으로 유지한다. 사용법은 [AI·개발·배포 안내](ai-operations.md)를 따른다.
