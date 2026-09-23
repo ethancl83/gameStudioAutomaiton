@@ -106,7 +106,8 @@ export function ConnectionResourcePanel({
     (r) => r.connectionId === connection.id && config.kinds.includes(r.kind),
   );
 
-  const writable = connection.status === 'connected' || connection.status === 'unverified';
+  const managerReadOnly = connection.provider === 'google-ads' && resources.some(r => r.data.managerCustomerId === connection.accountId.replace(/-/g, ''));
+  const writable = !managerReadOnly && (connection.status === 'connected' || connection.status === 'unverified');
 
   async function runList(op: string) {
     if (specFor(op, connection.provider).needsProject || cap?.operationFields?.[op]?.some(field => !field.remove)) {
@@ -129,6 +130,7 @@ export function ConnectionResourcePanel({
         </div>
       </div>
       <div className="card__body">
+        {managerReadOnly && <Notice tone="info">관리자 계정의 하위 광고 계정을 조회하고 있습니다. 캠페인을 변경하려면 해당 광고 계정을 별도로 연결해 주세요.</Notice>}
         <div className="row" style={{ gap: 8, marginBottom: 14 }}>
           {[...listOps, ...extraReadOps].map((op) => (
             <button key={op} className="btn btn--sm" onClick={() => void runList(op)} disabled={listAct.pending}>
@@ -220,6 +222,7 @@ function ResourceTable({
           {resources.map((r) => {
             // 이 리소스 종류에 맞는 행 작업만, 그리고 중지된 캠페인에는 pause를 다시 노출하지 않는다.
             const ops = rowOps
+              .filter((op) => !r.data.readOnly || !specFor(op, r.provider).externalWrite)
               .filter((op) => opAppliesToKind(op, r.kind))
               .filter((op) => !(op === 'pause-campaign' && /pause|stop/i.test(r.status)));
             const open = expanded === r.id;

@@ -232,6 +232,9 @@ export class ApiClient {
   importArtifact(projectId:string,input:{path:string;target:string}) {
     return this.request<ImportedArtifact>('POST', `/projects/${encodeURIComponent(projectId)}/artifacts`,input);
   }
+  async selectToolFile(): Promise<string | null> {
+    return this.isElectron && window.appOps ? window.appOps.selectToolFile() : null;
+  }
   async selectFolder(): Promise<string | null> {
     if (this.isElectron && window.appOps) {
       return window.appOps.selectFolder();
@@ -336,6 +339,13 @@ export class ApiClient {
   // Google OAuth 온보딩(신규 연결). 서버가 연결을 만들고 동의 URL을 돌려준다.
   // credentials에는 clientId(필수)·clientSecret?(선택)·packageName? 등 공급자 온보딩 필드만 담는다.
   // refreshToken/serviceAccountJson은 담지 않는다(OAuth 콜백이 갱신 토큰을 대신 저장).
+  oauthConfiguration() {
+    return this.request<{ provider: Provider; available: boolean; source?: string }[]>('GET', '/oauth/configuration');
+  }
+  registerGoogleOAuthApp(client: unknown) {
+    return this.request<{ registered: true }>('PUT', '/oauth/google/app', { client });
+  }
+
   startGoogleOAuth(body: {
     provider: 'google-play' | 'google-ads' | 'admob';
     label: string;
@@ -355,8 +365,8 @@ export class ApiClient {
   }
 
   // 자격 증명 병합 수정(취소된 키 복구). 서버가 기존 값을 노출하지 않고 새 값만 병합한다.
-  repairCredentials(id: string, credentials: Record<string, string>) {
-    return this.request<Connection>('PUT', `/connections/${encodeURIComponent(id)}/credentials`, { credentials });
+  repairCredentials(id: string, credentials: Record<string, string>, accountId?: string) {
+    return this.request<Connection>('PUT', `/connections/${encodeURIComponent(id)}/credentials`, { credentials, ...(accountId === undefined ? {} : { accountId }) });
   }
 
   runAction(

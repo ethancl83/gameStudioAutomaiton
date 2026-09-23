@@ -34,6 +34,7 @@ export interface AppOpsBridge {
   // 네이티브 폴더 선택. 취소 시 null.
   selectArtifact(target: string): Promise<string | null>;
   selectFolder(): Promise<string | null>;
+  selectToolFile(): Promise<string | null>;
   // 허용된 HTTPS 설정 링크만 시스템 브라우저로 연다.
   openExternal(url: string): Promise<{ ok: boolean; error?: string }>;
   platform(): Promise<string>;
@@ -70,6 +71,7 @@ const bridge: AppOpsBridge = {
   request: (method, path, body) => ipcRenderer.invoke('appops:request', method, path, body),
   selectArtifact: (target) => ipcRenderer.invoke('appops:selectArtifact', target),
   selectFolder: () => ipcRenderer.invoke('appops:selectFolder'),
+  selectToolFile: () => ipcRenderer.invoke('appops:selectToolFile'),
   openExternal: (url) => ipcRenderer.invoke('appops:openExternal', url),
   platform: () => ipcRenderer.invoke('appops:platform'),
   lifecycle: {

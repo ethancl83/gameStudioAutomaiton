@@ -117,6 +117,10 @@ async function parseGodot(root: string, fallbackName: string): Promise<ParsedPro
         appIdentifier = preset.identifier;
       }
     }
+    // Store operations use the Android package as the primary identifier when
+    // Android is present; desktop/iOS presets may precede it with another ID.
+    const android = presets.find(p => targetsFromGodotPlatform(p.platform).includes('android') && p.identifier && !p.identifier.includes('$'));
+    if (android) appIdentifier = android.identifier;
   }
   if (!appIdentifier) {
     findings.push(warning(

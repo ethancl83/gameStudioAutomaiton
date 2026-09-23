@@ -83,6 +83,8 @@ const ROUTES: RouteRule[] = [
   // 자격 증명 병합 수정(취소된 키 복구). 저장된 기존 값은 서버가 노출하지 않는다.
   { method: 'PUT', pattern: '/connections/:id/credentials' },
   // Google OAuth 온보딩: 신규 연결 시작, 기존 연결 재인증 시작.
+  { method: 'GET', pattern: '/oauth/configuration' },
+  { method: 'PUT', pattern: '/oauth/google/app' },
   { method: 'POST', pattern: '/oauth/google/start' },
   { method: 'POST', pattern: '/connections/:id/oauth/start' },
   // 빌드 서명·SSH 자격 증명 등록/회전/삭제. 비밀은 로컬 API로만 전송되고 응답에는 메타데이터만 온다.

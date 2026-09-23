@@ -626,6 +626,12 @@ function registerIpc(): void {
     return effectiveMode===mode&&!result.canceled?result.filePaths[0]??null:null;
   });
 
+  ipcMain.handle('appops:selectToolFile', async (e) => {
+    if (!isTrustedSender(e)) return null;
+    const result = await dialog.showOpenDialog({ title: '엔진·SDK 실행 파일 선택', properties: ['openFile', 'treatPackageAsDirectory'] });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
   ipcMain.handle('appops:selectFolder', async (e) => {
     if (!isTrustedSender(e)) return null;
     const result = await dialog.showOpenDialog({

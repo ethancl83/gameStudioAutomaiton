@@ -264,8 +264,7 @@ function RegisterProjectModal({
         ) : (
           <>
             <Notice tone="info">
-              폴더를 선택하면 제어 서비스가 읽기 전용으로 프로젝트를 탐지합니다. 빌드 스크립트를 실행하거나 원본을 수정하지
-              않습니다.
+              선택한 폴더와 하위 폴더에서 프로젝트를 찾습니다. 한 개면 자동으로 연결하고, 여러 개면 선택할 폴더를 안내합니다.
             </Notice>
             <Field label="프로젝트 폴더 경로" required htmlFor="proj-path" hint={api.isElectron ? '폴더 선택 버튼을 사용하거나 경로를 직접 입력하세요.' : '브라우저 개발 모드에서는 경로를 직접 입력하세요.'}>
               <div className="row" style={{ gap: 8, flexWrap: 'nowrap' }}>

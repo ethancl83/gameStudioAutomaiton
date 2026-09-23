@@ -61,9 +61,10 @@ export function AgentPanel({ state, projectId, requestContext, onRegister }: { s
           </select>
         </Field>}
         <Field label="사용할 AI" htmlFor={`${controlId}-provider`} hint={task?.provider ? '클리어하면 AI를 다시 선택할 수 있습니다.' : 'CLI의 기존 로그인·모델 설정을 사용합니다.'}>
-          <select id={`${controlId}-provider`} className="select" disabled={!agent || pending || !!task?.provider} value={task?.provider ?? agent?.settings.provider ?? 'auto'} onChange={event => void providerChanged(event.target.value as AgentSettings['provider'])}>
-            <option value="auto">설치된 CLI 자동 선택</option><option value="codex">Codex</option><option value="opencode">OpenCode</option>
-          </select>
+          <div className="tool-picker" role="group" aria-label="사용할 AI">
+            {([['auto', '자동 선택'], ['codex', 'Codex'], ['opencode', 'OpenCode']] as const).map(([id, label]) => <button type="button" key={id} className="btn btn--sm"
+              disabled={!agent || pending || !!task?.provider} aria-pressed={(task?.provider ?? agent?.settings.provider ?? 'auto') === id} onClick={() => void providerChanged(id)}><Bot size={15} aria-hidden />{label}</button>)}
+          </div>
         </Field>
         <button className="btn btn--sm" disabled={pending || !task} onClick={() => void action('clear')} title="진행 중인 AI를 중지하고 대화를 비웁니다. 결과물과 작업 이력은 보존됩니다."><Eraser size={14} />클리어</button>
         {onRegister && <button className="btn btn--sm" onClick={onRegister}><FolderPlus size={14} />프로젝트 등록</button>}

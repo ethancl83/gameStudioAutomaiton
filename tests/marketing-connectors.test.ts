@@ -86,6 +86,33 @@ function adsSearchHandler(rows: Record<string, unknown>[]) {
   };
 }
 
+test('Google Ads manager sync reads advertiser accounts with distinct identities and currencies', async () => {
+  let failSecond = false;
+  const {context, requests, dispatched} = await createContext({ provider:'google-ads', handler(url, request) {
+    const id = url.match(/customers\/(\d+)\//)![1];
+    const query = String((request.json as {query:string}).query);
+    if (query.includes('FROM customer_client')) return {results:[{customerClient:{id:'2222222222'}},{customerClient:{id:'3333333333'}}]};
+    if (id !== '1234567890') assert.equal(request.headers?.['login-customer-id'],'1234567890');
+    if (query.includes('FROM customer')) return {results:[{customer:{id,manager:id==='1234567890',currencyCode:id==='3333333333'?'KRW':'USD',timeZone:'Asia/Seoul'}}]};
+    assert.notEqual(id,'1234567890','manager must never receive campaign/metric queries');
+    if (id==='3333333333' && failSecond) throw new AppError('PERMISSION_REQUIRED','child denied');
+    if (query.includes('cost_micros')) return {results:[{segments:{date:'2026-09-23'},metrics:{costMicros:'1230000'}}]};
+    return {results:[{campaign:{id:'7',name:'Campaign',status:'PAUSED'}}]};
+  }});
+  const result = await googleAdsConnector.execute('sync',{},context);
+  assert.equal(result.summary.accountCount,2);
+  assert.deepEqual(result.resources?.map(r=>r.externalId),['2222222222:7','3333333333:7']);
+  assert.ok(result.resources?.every(r=>r.data.readOnly===true));
+  assert.deepEqual(result.metrics?.map(m=>m.currency),['USD','KRW']);
+  assert.equal(new Set(result.metrics?.map(m=>m.sourceId)).size,2);
+  assert.equal(dispatched(),0);
+  for (const operation of ['create-campaign','create-creative','update-campaign','pause-campaign']) await expectCode(googleAdsConnector.execute(operation,{},context),'ADVERTISER_ACCOUNT_REQUIRED');
+  assert.equal(dispatched(),0);
+  failSecond=true;
+  await expectCode(googleAdsConnector.execute('sync',{},context),'PERMISSION_REQUIRED');
+  assert.ok(requests.every(r=>r.options.write===false));
+});
+
 test('Google Ads check uses v25, Cloud OAuth, and never sends developer-token', async () => {
   const { context, requests } = await createContext({
     provider: 'google-ads', accountId: '123-456-7890',

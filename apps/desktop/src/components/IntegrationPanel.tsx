@@ -1,3 +1,4 @@
+import { ProviderPicker } from './ProviderPicker';
 // 게임 내 광고/결제 SDK 연동 패널(루트가 백엔드 구현, 여기서는 소비자).
 // - 원본 보존·변경 미리보기(파일/이유/해시)·충돌·되돌리기를 그대로 보여 준다.
 // - 선택하는 광고 단위/상품은 저장된 ExternalResource.id다(임의 경로·비밀 아님).
@@ -209,13 +210,8 @@ export function IntegrationPanel({
           <h3 style={{ margin: 0, fontSize: 14 }}>연동 미리보기 만들기</h3>
           <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
             <Field label="공급자" htmlFor="int-provider">
-              <select id="int-provider" value={providerId} onChange={(e) => setProviderId(e.target.value as IntegrationProvider)}>
-                {PROVIDERS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
+              <ProviderPicker label="SDK 공급자" value={providerId} onChange={setProviderId}
+                options={PROVIDERS.map(p => ({ id: p.id, provider: p.conn, label: p.label }))} />
             </Field>
             <Field label="플랫폼" htmlFor="int-platform">
               <select id="int-platform" value={platform} onChange={(e) => setPlatform(e.target.value as IntegrationPlatform)}>

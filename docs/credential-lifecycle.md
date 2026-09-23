@@ -1,6 +1,6 @@
 # 자격 증명 수명주기
 
-Last Updated: 2026-09-11
+Last Updated: 2026-09-23
 담당 모듈: `packages/credentials/` (진입점 `packages/credentials/index.ts`)
 계약 원본: [구현 계약 — 자격 증명 모듈 계약](implementation-contract.md#자격-증명-모듈-계약)
 관련 작업: [T-2.3](../dev/active/app-operations-platform/app-operations-platform-tasks.md), [개발계획 v1 7절](../dev/active/app-operations-platform/app-operations-platform-plan.md)
@@ -96,3 +96,11 @@ v2의 SSH 개인 키·Android 키스토어 버전·사용 중 삭제 보호는 [
 - 완료(모의 경계 검증): `tests/credentials.test.ts` 26개 테스트 — AES-GCM 왕복·변조·AAD(id) 교차 복사 차단, 키 유실 시 재생성 금지, 잠김/부재 구분, id path validation, 원자 쓰기 잔류물 없음, 메모리 KeyProvider·모의 fetch 기반 SA assertion(고정 endpoint·RS256 서명 검증), scope별 캐시·동시 갱신 직렬화·회전 저장, 오류 분류(임시 vs invalid_grant)·비밀 없는 메시지, Apple ES256 생성·검증·수명 상한, PKCE challenge/verifier 일치·state 일회성·TTL·loopback 검증. 실행: `node --import tsx --test tests/credentials.test.ts`.
 - 완료(실환경 읽기 전용): 이 Linux 장비에서 기본 `KeyringKeyProvider`로 `status()` 확인 — `{available:true, backend:'os-keyring'}`. 실측에서 `getSecret()`의 null 반환 특성을 확인해 반영했다. 마스터키 쓰기는 수행하지 않았다.
 - 미완료(실계정 없음): Google/Apple/Steam/AppLovin 실계정 토큰 발급, 실제 refresh token 회전, macOS/Windows 보관함 동작, 보관함 잠김 실환경 재현. V-02의 실계정 게이트는 T-2.1 계정 확보 후 수행한다.
+
+## 브라우저 연결과 OAuth 앱 재사용
+
+Google Play·Google Ads·AdMob·X·Threads는 브라우저 인증을 기본으로 제공한다. 제어 서비스의 `APPOPS_GOOGLE_CLIENT_ID`/`APPOPS_GOOGLE_CLIENT_SECRET`, `APPOPS_X_CLIENT_ID`/`APPOPS_X_CLIENT_SECRET`, `APPOPS_THREADS_CLIENT_ID`/`APPOPS_THREADS_CLIENT_SECRET`으로 앱 기본 클라이언트를 제공할 수 있다. Threads는 시크릿도 필요하다. Google은 계정 연결과 별개인 `Google OAuth 앱 등록`에서 공통 클라이언트를 먼저 저장할 수 있다. 공통 등록 → 환경변수 → 기존 연결 순서로 앱 ID·시크릿만 재사용한다. Google 공급자끼리는 앱 설정을 공유하며, 계정 토큰·MCC 등 계정별 설정은 복사하지 않는다. `GET /oauth/configuration`은 준비 여부와 설정 출처만 반환한다.
+
+공용 앱이 준비되지 않았다면 최초 한 번 공급자 콘솔에 OAuth 앱을 등록해야 한다. Google은 계정 연결 화면의 별도 **Google OAuth 앱 등록** 창에서 등록 콘솔을 열고 **데스크톱 앱** 클라이언트 JSON을 가져온다. `PUT /oauth/google/app`은 `client.installed`의 ID·시크릿만 검증해 `oauth-app-google` 보관함 항목에 암호화 저장하며, 데모에서는 거부한다. 서비스 계정을 연결하지 않아도 설정이 유지되고 전체 암호화 백업에도 포함된다. 공통 앱 교체는 기존 계정의 클라이언트·토큰 쌍을 변경하지 않는다. 웹 클라이언트 및 서비스 계정 JSON은 이 입력에서 거부한다. 브라우저 OAuth는 서비스 계정 키를 생성하지 않는다.
+
+Google Play의 계정 ID는 OpenID userinfo의 `sub`로 자동 확인하고, 새 방식으로 생성한 연결은 재인증 시 동일 계정을 검사한다. 추가 요청 scope는 `openid`이며 이메일은 요청하지 않는다. AdMob은 accounts.list의 publisher ID를 자동 확인한다. 여러 계정·조회 실패는 임의 계정 선택 없이 오류로 처리하고 직접 ID 입력을 안내한다. Google Ads 고객 ID처럼 자동 확인하지 않는 값은 계속 명시적으로 입력한다. 기본 Android 앱은 등록된 프로젝트에서 선택한다. App Store·Steam·AppLovin에 지원하지 않는 OAuth를 표시하지 않는다.

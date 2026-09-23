@@ -13,6 +13,40 @@ const ORIGINS: Record<Provider, string[]> = {
   x: ['https://api.x.com'], threads: ['https://graph.threads.net', 'https://graph.threads.com'],
 };
 
+async function permissionMessage(response: Response, provider: Provider): Promise<string> {
+  const fallback = '이 작업에 필요한 서비스 권한이 없습니다.';
+  if (!['google-play', 'google-ads', 'admob'].includes(provider)) { await response.body?.cancel(); return fallback; }
+  const reader = response.body?.getReader();
+  if (!reader) return fallback;
+  try {
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      size += part.value.byteLength;
+      if (size > 64 * 1024) { await reader.cancel(); return fallback; }
+      chunks.push(part.value);
+    }
+    const details = JSON.parse(Buffer.concat(chunks).toString('utf8'))?.error?.details;
+    if (!Array.isArray(details)) return fallback;
+    // Only translate known codes. Provider messages, metadata, and URLs may contain secrets.
+    const reasons = details.filter(d => d?.['@type'] === 'type.googleapis.com/google.rpc.ErrorInfo').map(d => d.reason);
+    if (reasons.includes('SERVICE_DISABLED')) {
+      const api = provider === 'google-play' ? 'Google Play Android Developer API' : provider === 'google-ads' ? 'Google Ads API' : 'AdMob API';
+      return `OAuth 앱의 Google Cloud 프로젝트에서 ${api}를 사용 설정한 뒤 다시 검사해 주세요.`;
+    }
+    if (reasons.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT')) return 'Google 연결에 필요한 동의 범위가 없습니다. 다시 연결해 권한에 동의해 주세요.';
+    if (provider === 'google-ads' && details.some(d => /^type\.googleapis\.com\/google\.ads\.googleads\.v\d+\.errors\.GoogleAdsFailure$/.test(d?.['@type'] ?? '') && Array.isArray(d.errors) && d.errors.some((e: { errorCode?: { authorizationError?: string } }) => e?.errorCode?.authorizationError === 'CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION'))) {
+      return 'Google Ads API가 테스트 계정만 허용하고 있습니다. OAuth 앱의 Google Cloud 프로젝트에서 탐색자(Explorer) 이상 액세스를 승인받은 뒤 다시 검사해 주세요.';
+    }
+    return fallback;
+  } catch {
+    // Diagnostics are best effort; malformed/erroring bodies retain the original HTTP 403.
+    return fallback;
+  } finally { reader.releaseLock(); }
+}
+
 export function createTransport(options: {
   provider: Provider; signal: AbortSignal; markDispatched(): void; markRejected?(): boolean | void; fetch?: typeof fetch;
 }): <T>(url: string, init?: ProviderRequest) => Promise<T> {
@@ -58,9 +92,10 @@ export function createTransport(options: {
     }
     if (!response.ok) {
       // Provider error bodies and request URLs can contain credentials. Never put them in history.
-      await response.body?.cancel();
+      const permission = response.status === 403 ? await permissionMessage(response, options.provider) : undefined;
+      if (response.status !== 403) await response.body?.cancel();
       const error = response.status === 401 ? new AppError('AUTH_REQUIRED', '서비스에서 인증 갱신 또는 연결 확인을 요구했습니다.', 401)
-        : response.status === 403 ? new AppError('PERMISSION_REQUIRED', '이 작업에 필요한 서비스 권한이 없습니다.', 403)
+        : response.status === 403 ? new AppError('PERMISSION_REQUIRED', permission!, 403)
         : response.status === 429 || response.status >= 500 ? new AppError('TEMPORARY', `서비스가 일시적으로 요청을 처리하지 못했습니다 (HTTP ${response.status}).`, 503)
         : response.status === 404 ? new AppError('RESOURCE_NOT_FOUND', '서비스에서 앱 또는 리소스를 찾지 못했습니다.', 404)
         : new AppError('PROVIDER_REJECTED', `서비스가 입력 또는 현재 상태를 허용하지 않았습니다 (HTTP ${response.status}). 서비스별 설정을 확인해 주세요.`, 422);

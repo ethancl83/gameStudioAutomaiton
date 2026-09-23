@@ -1,3 +1,4 @@
+import { ProviderPicker } from '../components/ProviderPicker';
 import { useAgentScope } from '../components/AgentActions';
 // 운영 준비 화면: 엔진·SDK 설치/연결, 프로젝트별 준비 점검, 스토어 앱 매핑, 광고/결제 연동,
 // 앱·제어 서비스 수명주기를 한 화면에서 다룬다. 데모/실제 모두 같은 논리 API를 쓴다(모드는 불변 클라이언트).
@@ -6,11 +7,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   CircleAlert,
-  CircleDot,
   Download,
   FolderOpen,
   Loader2,
-  PackageCheck,
   Rocket,
   Store,
   Wrench,
@@ -18,7 +17,7 @@ import {
 } from 'lucide-react';
 import type { ViewKey } from '../App';
 import { api } from '../api';
-import type { AppState, BuildTarget, Connection, Provider } from '../../../../packages/domain';
+import type { AppState, BuildTarget, Connection, Provider, Toolchain } from '../../../../packages/domain';
 import type {
   PreparationCheck,
   PreparationPreferences,
@@ -29,7 +28,7 @@ import type {
   ToolId,
   ToolInstall,
 } from '../../../../packages/setup/types';
-import { Badge, Card, Field, LoadingBlock, Notice, Spinner, Stat } from '../components/ui';
+import { Badge, Card, Field, LoadingBlock, Notice, Spinner } from '../components/ui';
 import { RunnerSelect } from '../components/RunnerSelect';
 import { IntegrationPanel } from '../components/IntegrationPanel';
 import { LifecyclePanel } from '../components/LifecyclePanel';
@@ -76,6 +75,7 @@ export function SetupView({
   refresh: () => Promise<void>;
   goTo: (v: ViewKey) => void;
 }) {
+  const [section, setSection] = useState<'tools' | 'projects' | 'lifecycle'>('tools');
   const [setup, setSetup] = useState<PreparationState | null>(null);
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -125,29 +125,26 @@ export function SetupView({
 
   return (
     <div className="stack" style={{ gap: 16 }}>
-      <Card title="운영 준비 개요" icon={Rocket}>
-        <div className="grid grid--stats">
-          <Stat label="실행 모드" value={setup.mode === 'demo' ? '데모' : '실제'} icon={CircleDot} />
-          <Stat
-            label="프로젝트 준비"
-            value={`${readyProjects}/${setup.projects.length}`}
-            sub="대상별 준비 완료 수"
-            icon={PackageCheck}
-          />
-          <Stat
-            label="빌드 격리"
-            value={setup.isolation.available ? '사용 가능' : '불가'}
-            sub={setup.isolation.backend + (setup.isolation.reason ? ` · ${setup.isolation.reason}` : '')}
-          />
+      <Card>
+        <div className="row row--between" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <div className="row" style={{ gap: 10 }}><Rocket size={17} aria-hidden /><strong>운영 준비</strong><Badge tone="neutral">{setup.mode === 'demo' ? '데모' : '실제'}</Badge></div>
+          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <span className="small">프로젝트 준비 <strong>{readyProjects}/{setup.projects.length}</strong></span>
+            <span title={setup.isolation.reason}><Badge tone={setup.isolation.available ? 'ok' : 'warn'}>빌드 환경 {setup.isolation.available ? '준비됨' : '설정 필요'}</Badge></span>
+          </div>
         </div>
         {errorMsg && phase === 'ready' && <Notice tone="warn">최근 갱신 실패: {errorMsg}</Notice>}
       </Card>
 
-      <LifecyclePanel />
-
-      <ToolsSection setup={setup} reload={load} />
-
-      <ProjectPreparationSection state={state} setup={setup} reload={load} refresh={refresh} goTo={goTo} />
+      <div className="tabs" role="tablist" aria-label="운영준비 항목">
+        {([['tools', '엔진·SDK'], ['projects', '프로젝트 준비'], ['lifecycle', '앱·서비스']] as const).map(([id, label]) =>
+          <button key={id} id={`setup-tab-${id}`} className="tab" role="tab" aria-selected={section === id} aria-controls={`setup-panel-${id}`} onClick={() => setSection(id)}>{label}</button>)}
+      </div>
+      <div role="tabpanel" id={`setup-panel-${section}`} aria-labelledby={`setup-tab-${section}`}>
+        {section === 'tools' && <ToolsSection setup={setup} reload={load} />}
+        {section === 'projects' && <ProjectPreparationSection state={state} setup={setup} reload={load} refresh={refresh} goTo={goTo} />}
+        {section === 'lifecycle' && <LifecyclePanel />}
+      </div>
     </div>
   );
 }
@@ -155,6 +152,7 @@ export function SetupView({
 // --- 도구(엔진/SDK) 설치·연결 ---
 function ToolsSection({ setup, reload }: { setup: PreparationState; reload: () => Promise<void> }) {
   const rescan = useAction<PreparationState>(reload);
+  const [selectedTool, setSelectedTool] = useState<ToolId>('godot');
   return (
     <Card
       title="엔진 · SDK 준비"
@@ -170,17 +168,17 @@ function ToolsSection({ setup, reload }: { setup: PreparationState; reload: () =
           검증된 공식 설치본을 내려받아 설치하거나, 이미 설치한 도구의 경로를 연결합니다. 설치 경로는 신뢰하는 호스트
           입력이며, 시스템 환경 변수를 바꾸지 않습니다.
         </p>
-        {setup.catalog.map((item) => (
-          <ToolRow
-            key={item.id}
-            item={item}
-            settings={setup.settings}
-            job={setup.installations.filter((j) => j.toolId === item.id)
-              .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]}
-            available={setup.tools.find((t) => t.name === TOOL_PROBE[item.id])?.available ?? false}
-            reload={reload}
-          />
-        ))}
+        <div className="tool-picker" role="group" aria-label="엔진·SDK 선택">
+          {setup.catalog.map(item => <button type="button" className="btn" key={item.id} aria-pressed={selectedTool === item.id} onClick={() => setSelectedTool(item.id)}>
+            <Wrench size={15} aria-hidden />{item.name}
+            {setup.installations.some(job => job.toolId === item.id && ACTIVE_INSTALL.has(job.status)) && <Spinner />}
+          </button>)}
+        </div>
+        {setup.catalog.filter(item => item.id === selectedTool).map(item => <ToolRow key={item.id} item={item}
+          settings={setup.settings} tool={setup.tools.find(t => t.name === TOOL_PROBE[item.id])}
+          javaReady={setup.tools.some(t => t.name === 'jdk-home' && t.available)} onSelectJdk={() => setSelectedTool('jdk')}
+          job={setup.installations.filter(j => j.toolId === item.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]} reload={reload} />)}
+        {rescan.error && <Notice tone="error">{rescan.error.message}</Notice>}
       </div>
     </Card>
   );
@@ -190,16 +188,23 @@ function ToolRow({
   item,
   settings,
   job,
-  available,
+  tool,
+  javaReady,
+  onSelectJdk,
   reload,
 }: {
   item: ToolCatalogItem;
   settings: PreparationState['settings'];
   job?: ToolInstall;
-  available: boolean;
+  tool?: Toolchain;
+  javaReady: boolean;
+  onSelectJdk: () => void;
   reload: () => Promise<void>;
 }) {
   const currentPath = item.settingsKey ? settings[item.settingsKey] : undefined;
+  const available = tool?.available ?? false;
+  const detectedPath = available ? tool?.executable : undefined;
+  const needsJdk = item.id === 'android-sdk' && !javaReady;
   const isFile = FILE_TOOLS.has(item.id);
   const [pathInput, setPathInput] = useState(currentPath ?? '');
   const [accepted, setAccepted] = useState(false);
@@ -214,7 +219,7 @@ function ToolRow({
   }, [currentPath]);
 
   const pickFolder = async () => {
-    const picked = await api.selectFolder();
+    const picked = isFile ? await api.selectToolFile() : await api.selectFolder();
     if (picked) setPathInput(picked);
   };
 
@@ -222,12 +227,9 @@ function ToolRow({
     <div className="stack" style={{ gap: 8, padding: '12px 0', borderTop: '1px solid var(--border)' }}>
       <div className="row" style={{ gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <strong>{item.name}</strong>
-        {item.version && <Badge tone="neutral">{item.version}</Badge>}
-        {currentPath ? (
-          <Badge tone={available ? 'ok' : 'warn'}>{available ? '연결됨' : '경로 있음(미확인)'}</Badge>
-        ) : (
-          <Badge tone="neutral">미설정</Badge>
-        )}
+        {item.version && <Badge tone="neutral">설치 제공 {item.version}</Badge>}
+        <Badge tone={available ? 'ok' : currentPath ? 'warn' : 'neutral'}>{available ? (currentPath ? '연결됨' : '자동 감지됨') : currentPath ? '확인 필요' : '미설정'}</Badge>
+        {tool?.version && <Badge tone="ok">감지 버전 {tool.version}</Badge>}
         <a href={item.documentation} target="_blank" rel="noreferrer" className="muted" style={{ marginLeft: 'auto' }}>
           공식 문서
         </a>
@@ -236,6 +238,9 @@ function ToolRow({
         {item.description}
       </p>
 
+      {tool?.reason && !available && <Notice tone="warn">{tool.reason}</Notice>}
+      {detectedPath && <p className="small muted mono" style={{ overflowWrap: 'anywhere', margin: 0 }}>{detectedPath}</p>}
+      {needsJdk && <Notice tone="info" action={<button className="btn btn--sm" onClick={onSelectJdk}>JDK 준비</button>}>Android SDK 설치 전에 JDK를 설치하거나 연결하세요.</Notice>}
       {item.settingsKey && (
         <div className="stack" style={{ gap: 6 }}>
           <Field
@@ -245,15 +250,16 @@ function ToolRow({
             <div className="row" style={{ gap: 8 }}>
               <input
                 id={`tool-${item.id}`}
+                className="input"
                 type="text"
                 value={pathInput}
                 onChange={(e) => setPathInput(e.target.value)}
                 placeholder={isFile ? '/경로/실행파일' : '/경로/폴더'}
                 style={{ flex: 1 }}
               />
-              {electron && !isFile && (
+              {electron && (
                 <button className="btn btn--sm" onClick={() => void pickFolder()} type="button">
-                  <FolderOpen size={14} /> 폴더 선택
+                  <FolderOpen size={14} /> {isFile ? '파일 선택' : '폴더 선택'}
                 </button>
               )}
             </div>
@@ -319,12 +325,12 @@ function ToolRow({
             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
               <button
                 className="btn btn--sm"
-                disabled={install.pending || (!!item.licenseUrl && !accepted)}
+                disabled={install.pending || needsJdk || (!!item.licenseUrl && !accepted)}
                 onClick={() =>
                   void install.run(() => api.startToolInstall({ toolId: item.id, acceptLicense: item.licenseUrl ? accepted : undefined }))
                 }
               >
-                {install.pending ? <Spinner /> : <Download size={14} />} 설치
+                {install.pending ? <Spinner /> : <Download size={14} />} {item.version ? `${item.version} 설치` : '설치'}
               </button>
               {job?.status === 'failed' && <span className="badge badge--error">이전 설치 실패: {job.message}</span>}
             </div>
@@ -351,6 +357,7 @@ function ProjectPreparationSection({
   refresh: () => Promise<void>;
   goTo: (v: ViewKey) => void;
 }) {
+  const [tab, setTab] = useState<'checks' | 'build' | 'store' | 'integration'>('checks');
   const projects = state.projects;
   const [projectId, setProjectId] = useState(projects[0]?.id ?? '');
   const project = projects.find((p) => p.id === projectId) ?? projects[0];
@@ -406,13 +413,15 @@ function ProjectPreparationSection({
           )}
         </div>
 
-        {prep && <CheckList checks={prep.checks} goTo={goTo} />}
+        <div className="tabs" role="tablist" aria-label="프로젝트 준비 항목">
+          {([['checks', '준비 점검'], ['build', '빌드 설정'], ['store', '스토어 연결'], ['integration', '광고·결제 SDK']] as const).map(([id, label]) =>
+            <button key={id} className="tab" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>)}
+        </div>
+        {tab === 'checks' && prep && <CheckList checks={prep.checks} goTo={goTo} />}
+        {tab === 'build' && <PreparationForm project={project} target={target} prefs={prefs} reload={reload} state={state} />}
+        {tab === 'store' && <StoreAppSection project={project} target={target} state={state} reload={reload} refresh={refresh} />}
+        {tab === 'integration' && <IntegrationPanel projectId={project.id} connections={state.connections} resources={state.resources} />}
 
-        <PreparationForm project={project} target={target} prefs={prefs} reload={reload} state={state} />
-
-        <StoreAppSection project={project} target={target} state={state} reload={reload} refresh={refresh} />
-
-        <IntegrationPanel projectId={project.id} connections={state.connections} resources={state.resources} />
       </div>
     </Card>
   );
@@ -587,13 +596,8 @@ function StoreAppSection({
       </p>
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <Field label="스토어" htmlFor="store-provider">
-          <select id="store-provider" value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}>
-            {STORE_PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+          <ProviderPicker label="스토어" value={provider} onChange={setProvider}
+            options={STORE_PROVIDERS.map(p => ({ ...p, provider: p.id }))} />
         </Field>
         <Field label="계정" htmlFor="store-conn" hint={eligibleConnections.length === 0 ? '해당 스토어 계정을 먼저 연결하세요.' : undefined}>
           <select id="store-conn" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>

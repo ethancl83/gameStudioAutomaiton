@@ -39,6 +39,35 @@ const capability: Connector['capability'] = {
 };
 const credentials = { clientId: 'test-client', refreshToken: 'never-persist-this-secret' };
 
+test('legacy Ads account names can be repaired without replacing OAuth, but valid accounts cannot be retargeted', async t => {
+  const connector: Connector = { capability, execute: async () => ({ summary: {} }) };
+  const {api, controller, vault} = await setup(t, connector);
+  const original = unwrap((await api<Connection>('/connections', 'POST', {provider:'google-ads',label:'Ads',accountId:'1111111111',credentials})).value);
+  controller.service.store.put('connection', original.id, {...original,accountId:'dermolabs'});
+  const path = `/connections/${original.id}/credentials`;
+  assert.equal((await api(path, 'PUT', {credentials:{},accountId:'another-name'})).status,400);
+  const repaired = unwrap((await api<Connection>(path, 'PUT', {credentials:{},accountId:'148-125-4086'})).value);
+  assert.equal(repaired.id, original.id);
+  assert.equal(repaired.accountId, '1481254086');
+  assert.equal(repaired.status, 'unverified');
+  assert.equal((await vault.get(original.id)).refreshToken, credentials.refreshToken);
+  assert.equal((await api(path, 'PUT', {credentials:{},accountId:'2222222222'})).status,409);
+});
+
+test('Ads account repair rejects duplicates and in-flight OAuth without losing original credentials', async t => {
+  const connector: Connector = { capability, execute: async () => ({ summary: {} }) };
+  const {api, controller, vault} = await setup(t, connector);
+  const original = unwrap((await api<Connection>('/connections', 'POST', {provider:'google-ads',label:'Legacy',accountId:'1111111111',credentials})).value);
+  controller.service.store.put('connection', original.id, {...original,accountId:'dermolabs'});
+  await api('/connections', 'POST', {provider:'google-ads',label:'Existing',accountId:'2222222222',credentials});
+  const path = `/connections/${original.id}/credentials`;
+  assert.equal((await api(path, 'PUT', {credentials:{},accountId:'2222222222'})).status,409);
+  await api(`/connections/${original.id}/oauth/start`, 'POST', {});
+  assert.equal((await api(path, 'PUT', {credentials:{},accountId:'3333333333'})).status,409);
+  assert.equal(controller.service.store.get<Connection>('connection', original.id)?.accountId,'dermolabs');
+  assert.equal((await vault.get(original.id)).refreshToken,credentials.refreshToken);
+});
+
 test('advertising creates reject a different project app before queuing or spending', async t => {
   for (const provider of ['google-ads','applovin-ads','applovin-max'] as const) {
     let writes = 0;
@@ -46,7 +75,7 @@ test('advertising creates reject a different project app before queuing or spend
     const connector: Connector = {capability:{...capability,provider,operations:[operation]},async execute(_op,_input,ctx){ctx.markDispatched();writes++;return{summary:{}};}};
     const{api,projectPath,controller}=await setup(t,connector);
     const project=unwrap((await api<Project>('/projects','POST',{path:projectPath})).value);
-    const connection=unwrap((await api<Connection>('/connections','POST',{provider,label:provider,accountId:'account',credentials:provider==='google-ads'?credentials:{}})).value);
+    const connection=unwrap((await api<Connection>('/connections','POST',{provider,label:provider,accountId:provider==='google-ads'?'1234567890':'account',credentials:provider==='google-ads'?credentials:{}})).value);
     await api('/projects/'+project.id+'/policy','PUT',{...DEFAULT_POLICY,allowedConnectionIds:[connection.id],allowCampaignWrites:true,allowMonetizationWrites:true,maxDailyBudgetMicros:'9000000'});
     const result=await api('/connections/'+connection.id+'/actions','POST',{operation,projectId:project.id,input:{name:'Wrong app',dailyBudgetMicros:'1000000',currency:'USD',[provider==='google-ads'?'appId':'packageName']:'com.other.app'},idempotencyKey:'cross-app-create'});
     assert.equal(result.status,409);assert.equal(writes,0);assert.equal(controller.service.store.runs().length,0);
@@ -261,4 +290,130 @@ test('unresolved external effects keep their account and project available for r
   assert.equal((await api('/connections/' + connection.id, 'DELETE')).status, 409);
   assert.equal((await api('/projects/' + project.id, 'DELETE')).status, 409);
   assert.equal(await vault.has(connection.id), true); assert.ok(store.get('project', project.id));
+});
+
+test('OAuth reuses saved app credentials without copying user tokens or exposing secrets', async t => {
+  const { api, controller, vault } = await setup(t, { capability, execute: async () => ({ summary: {} }) }, async () =>
+    Response.json({ refresh_token: 'new-user-token', access_token: 'new-access-token', expires_in: 3600 }));
+  const prior = unwrap((await api<Connection>('/connections', 'POST', {
+    provider: 'google-ads', label: '기존 앱', accountId: '123', credentials: { ...credentials, clientSecret: 'app-secret', loginCustomerId: 'private-mcc' },
+  })).value);
+  const config = await api('/oauth/configuration');
+  assert.ok(JSON.stringify(config.value).includes('기존 앱'));
+  assert.ok(!JSON.stringify(config.value).includes('app-secret'));
+  assert.ok(!JSON.stringify(config.value).includes(credentials.clientId));
+  const begun = unwrap((await api<{ connectionId: string; authorizationUrl: string }>('/oauth/google/start', 'POST', {
+    provider: 'google-ads', label: '다른 계정', accountId: '456', credentials: {},
+  })).value);
+  const url = new URL(begun.authorizationUrl);
+  assert.equal(url.searchParams.get('client_id'), credentials.clientId);
+  await controller.service.completeOAuth(url.searchParams.get('state')!, 'code');
+  const stored = await vault.get(begun.connectionId);
+  assert.equal(stored.clientSecret, 'app-secret');
+  assert.equal(stored.refreshToken, 'new-user-token');
+  assert.equal(stored.loginCustomerId, undefined);
+  assert.equal((await vault.get(prior.id)).refreshToken, credentials.refreshToken);
+});
+
+test('Google app registration is independent, shared, secret-free in responses, and preserves existing client/token pairs', async t => {
+  const { api, controller, vault, directory } = await setup(t, { capability, execute: async () => ({ summary: {} }) }, async () =>
+    Response.json({ refresh_token: 'account-token', access_token: 'account-access', expires_in: 3600 }));
+  const clientId = 'registered-client.apps.googleusercontent.com';
+  const clientSecret = 'shared-client-secret';
+  const registered = await api('/oauth/google/app', 'PUT', { client: { installed: { client_id: clientId, client_secret: clientSecret, refreshToken: 'ignore-me' } } });
+  assert.deepEqual(unwrap(registered.value), { registered: true });
+  assert.equal(controller.service.store.list('connection').length, 0);
+  const config = unwrap((await api<{ provider: string; available: boolean; source?: string }[]>('/oauth/configuration')).value);
+  for (const provider of ['google-play', 'google-ads', 'admob']) assert.deepEqual(config.find(c => c.provider === provider), { provider, available: true, source: 'Google OAuth 공통 등록' });
+  for (const secret of [clientId, clientSecret]) assert.ok(!JSON.stringify(config).includes(secret));
+  assert.deepEqual(await vault.get('oauth-app-google'), { clientId, clientSecret });
+  const encrypted = await readFile(join(directory, 'credentials', 'oauth-app-google.cred.json'), 'utf8');
+  assert.ok(!encrypted.includes(clientId)); assert.ok(!encrypted.includes(clientSecret));
+  assert.deepEqual((await vault.snapshotRecords())['oauth-app-google'], { clientId, clientSecret });
+  const first = unwrap((await api<{ connectionId: string; authorizationUrl: string }>('/oauth/google/start', 'POST', {
+    provider: 'google-ads', label: '계정 연결', accountId: '123', credentials: {},
+  })).value);
+  const url = new URL(first.authorizationUrl);
+  assert.equal(url.searchParams.get('client_id'), clientId);
+  await controller.service.completeOAuth(url.searchParams.get('state')!, 'code');
+  const before = await vault.get(first.connectionId);
+  unwrap((await api('/oauth/google/app', 'PUT', { client: { installed: { client_id: 'replacement.apps.googleusercontent.com' } } })).value);
+  assert.deepEqual(await vault.get(first.connectionId), before);
+  const reauth = unwrap((await api<{ authorizationUrl: string }>(`/connections/${first.connectionId}/oauth/start`, 'POST', {})).value);
+  assert.equal(new URL(reauth.authorizationUrl).searchParams.get('client_id'), clientId);
+  const next = unwrap((await api<{ authorizationUrl: string }>('/oauth/google/start', 'POST', { provider: 'google-ads', label: '새 계정', accountId: '456' })).value);
+  assert.equal(new URL(next.authorizationUrl).searchParams.get('client_id'), 'replacement.apps.googleusercontent.com');
+});
+
+test('Google app registration rejects unsupported JSON and demo writes without replacing a saved app', async t => {
+  const { api, vault } = await setup(t);
+  const client = { installed: { client_id: 'valid.apps.googleusercontent.com' } };
+  unwrap((await api('/oauth/google/app', 'PUT', { client })).value);
+  for (const invalid of [null, {}, { web: client.installed }, { type: 'service_account' }, { installed: { client_id: 'invalid' } }, { installed: { client_id: client.installed.client_id, client_secret: 123 } }]) {
+    const result = await api('/oauth/google/app', 'PUT', { client: invalid });
+    assert.equal(result.status, 400);
+    assert.deepEqual(await vault.get('oauth-app-google'), { clientId: client.installed.client_id });
+  }
+  const demo = await api('/demo/oauth/google/app', 'PUT', { client });
+  assert.equal(demo.value.ok, false);
+  if (!demo.value.ok) assert.equal(demo.value.error.code, 'DEMO_AUTH');
+});
+
+test('Google Ads rejects account names before beginning OAuth', async t => {
+  const { api, controller } = await setup(t, { capability, execute: async () => ({ summary: {} }) });
+  const result = await api('/oauth/google/start', 'POST', { provider: 'google-ads', label: '광고', accountId: 'dermolabs', credentials: { clientId: 'test-client' } });
+  assert.equal(result.status, 400);
+  if (!result.value.ok) assert.match(result.value.error.message, /고객 ID는 숫자/);
+  assert.equal(controller.service.store.list('connection').length, 0);
+});
+
+test('AdMob OAuth discovers publisher ID instead of requiring duplicate manual IDs', async t => {
+  const connector: Connector = { capability: { ...capability, provider: 'admob', fields: [{ key: 'publisherId', label: 'Publisher', required: true }] }, execute: async () => ({ summary: {} }) };
+  const { api, controller, vault } = await setup(t, connector, async (input, init) => {
+    if (String(input) === 'https://admob.googleapis.com/v1/accounts') {
+      assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer admob-access');
+      return Response.json({ account: [{ publisherId: 'pub-1234567890123456' }] });
+    }
+    return Response.json({ refresh_token: 'admob-refresh', access_token: 'admob-access', expires_in: 3600 });
+  });
+  const begun = unwrap((await api<{ connectionId: string; authorizationUrl: string }>('/oauth/google/start', 'POST', {
+    provider: 'admob', label: 'AdMob', accountId: '', credentials: { clientId: 'admob-client' },
+  })).value);
+  const url = new URL(begun.authorizationUrl);
+  const connection = await controller.service.completeOAuth(url.searchParams.get('state')!, 'code');
+  assert.equal(connection.accountId, 'pub-1234567890123456');
+  assert.equal((await vault.get(connection.id)).publisherId, connection.accountId);
+  assert.ok(!JSON.stringify(connection).includes('admob-access'));
+});
+
+test('reinspection repairs previously registered unknown parent folders without changing project identity', async t => {
+  const { api, controller, projectPath } = await setup(t);
+  const project = unwrap((await api<Project>('/projects', 'POST', { path: projectPath })).value);
+  const nested = join(projectPath, 'source');
+  await mkdir(nested);
+  const { rename } = await import('node:fs/promises');
+  await rename(join(projectPath, 'project.godot'), join(nested, 'project.godot'));
+  controller.service.store.put('project', project.id, { ...project, engine: 'unknown' });
+  const inspected = unwrap((await api<Project>(`/projects/${project.id}/inspect`, 'POST', {})).value);
+  assert.equal(inspected.id, project.id);
+  assert.equal(inspected.rootPath, await realpath(nested));
+  assert.equal(inspected.engine, 'godot');
+});
+
+test('Google Play OAuth resolves Google identity and requests only the extra OpenID scope', async t => {
+  let subject = 'google-user-123';
+  const connector: Connector = { capability: { ...capability, provider: 'google-play' }, execute: async () => ({ summary: {} }) };
+  const { api, controller } = await setup(t, connector, async input => String(input).endsWith('/userinfo')
+    ? Response.json({ sub: subject })
+    : Response.json({ refresh_token: 'play-refresh', access_token: 'play-access', expires_in: 3600 }));
+  const begun = unwrap((await api<{ connectionId: string; authorizationUrl: string }>('/oauth/google/start', 'POST', {
+    provider: 'google-play', label: 'Play', credentials: { clientId: 'play-client', packageName: 'com.example.game' },
+  })).value);
+  const url = new URL(begun.authorizationUrl);
+  assert.ok(url.searchParams.get('scope')?.split(' ').includes('openid'));
+  assert.ok(!url.searchParams.get('scope')?.split(' ').includes('email'));
+  assert.equal((await controller.service.completeOAuth(url.searchParams.get('state')!, 'code')).accountId, 'google-user-123');
+  const again = await controller.service.beginOAuth({}, 'http://127.0.0.1/callback', begun.connectionId);
+  subject = 'different-user';
+  await assert.rejects(controller.service.completeOAuth(new URL(again.authorizationUrl).searchParams.get('state')!, 'code'), { code: 'ACCOUNT_MISMATCH' });
 });

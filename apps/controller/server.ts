@@ -239,6 +239,8 @@ export async function startController(options: ControllerOptions = {}): Promise<
       else if (method === 'POST' && path === '/api/social/schedules') data = activeService.social.schedule(body);
       else if (method === 'DELETE' && socialSchedule) data = activeService.social.cancelSchedule(socialSchedule[1]!);
       else if (method === 'POST' && socialStart) data = await activeService.beginSocialOAuth(socialStart[1] as 'x' | 'threads', body, `http://127.0.0.1:${port}/api/oauth/social/callback`);
+      else if (method === 'GET' && path === '/api/oauth/configuration') data = await activeService.oauthConfiguration();
+      else if (method === 'PUT' && path === '/api/oauth/google/app') data = await activeService.registerGoogleOAuthApp(body);
       else if (method === 'POST' && path === '/api/oauth/google/start') data = await activeService.beginOAuth(body, `http://127.0.0.1:${port}/api/oauth/google/callback`);
       else if (method === 'POST' && /^\/api\/pipelines\/[a-zA-Z0-9-]{1,100}\/cancel$/.test(path)) data = activeService.pipelines.cancel(path.split('/')[3]!);
       else if (match) {

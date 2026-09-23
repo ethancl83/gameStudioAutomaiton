@@ -34,6 +34,18 @@ name="Linux"
 platform="Linux"
 `;
 
+test('Godot primary store identity uses Android even after different desktop and iOS presets', async t => {
+  const root = await tempDir(t, 'appops-godot-identity-');
+  await write(root, 'project.godot', godotProject);
+  const apple = '[preset.0]\nname="macOS"\nplatform="macOS"\n[preset.0.options]\napplication/bundle_identifier="com.legacy.desktop"\n[preset.1]\nname="iOS"\nplatform="iOS"\n[preset.1.options]\napplication/bundle_identifier="com.legacy.ios"\n';
+  await write(root, 'export_presets.cfg', apple + '[preset.2]\nname="Android"\nplatform="Android"\n[preset.2.options]\npackage/unique_name="com.current.android"\n');
+  const result = await inspectProject(root);
+  assert.equal(result.appIdentifier, 'com.current.android');
+  assert.deepEqual(result.targets, ['macos', 'ios', 'android']);
+  await write(root, 'export_presets.cfg', '[preset.0]\nname="iOS"\nplatform="iOS"\n[preset.0.options]\napplication/bundle_identifier="com.legacy.ios"\n');
+  assert.equal((await inspectProject(root)).appIdentifier, 'com.legacy.ios');
+});
+
 test('inspects Godot, Unity, Unreal, Android and iOS from real project files', async (t) => {
   const root = await tempDir(t, 'appops-inspect-');
 
@@ -422,4 +434,22 @@ test('inspectProject follows realpath and does not require git', async (t) => {
   const info = await inspectProject(link);
   assert.equal(info.engine, 'godot');
   assert.equal(info.rootPath, await realpath(actual));
+});
+
+test('project discovery finds nested roots and ignores exports, dependencies and symlinks', async t => {
+  const { resolveProjectRoot } = await import('../packages/inspection/discover.js');
+  const root = await tempDir(t, 'appops-discovery-');
+  await write(root, 'game/source/project.godot', godotProject);
+  await write(root, 'game/source/android/build/gradlew', 'do not run');
+  await write(root, 'game/source/android/build/build.gradle', '');
+  await write(root, 'node_modules/sample/project.godot', godotProject);
+  await write(root, 'tmp/verification/project.godot', godotProject);
+  await symlink(join(root, 'game'), join(root, 'linked-game'));
+  assert.equal(await resolveProjectRoot(root), join(await realpath(root), 'game/source'));
+  const info = await inspectProject(await resolveProjectRoot(root));
+  assert.equal(info.engine, 'godot');
+  assert.equal(info.findings.some(f => f.code === 'godot.android_export_template'), false);
+  assert.equal(await resolveProjectRoot(join(root, 'game/source')), info.rootPath);
+  await write(root, 'second/project.godot', godotProject);
+  await assert.rejects(resolveProjectRoot(root), { code: 'PROJECT_SELECTION_REQUIRED' });
 });

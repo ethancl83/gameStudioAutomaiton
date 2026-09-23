@@ -94,11 +94,6 @@ async function listUproject(root: string): Promise<string[]> {
   return names.filter((name) => name.endsWith('.uproject'));
 }
 
-async function godotLooksLikeExportHost(root: string): Promise<boolean> {
-  // Godot 커스텀 Android 빌드는 android/build 아래 Gradle을 둔다. 네이티브 Android로 보지 않는다.
-  return (await existsIn(root, 'android/build/gradlew')) || (await existsIn(root, 'android/build/build.gradle'));
-}
-
 export async function detectEngine(root: string): Promise<Detection> {
   const markers: EngineMarker[] = [];
   const findings: Finding[] = [];
@@ -144,12 +139,6 @@ export async function detectEngine(root: string): Promise<Detection> {
     if (ios.hit) {
       markers.push({ engine: 'ios', evidence: ios.evidence ?? 'Xcode', primary: true });
     }
-  } else if (await godotLooksLikeExportHost(root)) {
-    findings.push(warning(
-      'godot.android_export_template',
-      'Godot 프로젝트 안의 Android Gradle 템플릿은 네이티브 Android 프로젝트가 아닙니다.',
-      'android/build',
-    ));
   }
 
   // 엔진 프로젝트가 아닌데 Android+iOS 마커가 같이 있으면 충돌로 기록한다.

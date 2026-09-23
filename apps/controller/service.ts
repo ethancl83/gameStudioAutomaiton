@@ -1,3 +1,4 @@
+import { GOOGLE_OAUTH_APP_ID, OAUTH_PROVIDERS, oauthCredentials, resolveOAuthClient } from './oauth-clients.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { PortableBackups } from './portable-backups.js';
 import { importArtifact, importedArtifactPath, assertArtifactApp } from './imported-artifacts.js';
@@ -9,6 +10,7 @@ import { CredentialVault, TokenManager, GoogleOAuthBroker } from '../../packages
 import { DEFAULT_POLICY, type AppState, type ImportedArtifact, type Connection, type ExternalResource, type MetricFact, type Project, type Provider, type ReleasePipeline, type RunnerRegistration, type Run, type Toolchain } from '../../packages/domain/index.js';
 import { AppError, object, prohibitSecrets, redact, text } from '../../packages/domain/errors.js';
 import { Store } from '../../packages/storage/index.js';
+import { resolveProjectRoot } from '../../packages/inspection/discover.js';
 import { inspectProject } from '../../packages/inspection/index.js';
 import { createBuildPlan, scanToolchains } from '../../packages/engines/index.js';
 import { createSnapshot, executeBuild } from '../runner/index.js';
@@ -227,7 +229,7 @@ export class AppService {
   }
   async addProject(input: unknown): Promise<Project> {
     const directory = text(object(input).path, '프로젝트 폴더', 4096);
-    const inspection = await inspectProject(directory);
+    const inspection = await inspectProject(await resolveProjectRoot(directory));
     if (this.protectedProjectRoots().some(root => within(inspection.rootPath, root) || within(root, inspection.rootPath))) {
       throw new AppError('PROTECTED_DIRECTORY', '앱의 운영 데이터 폴더를 포함하는 경로는 프로젝트로 등록할 수 없습니다.');
     }
@@ -242,8 +244,10 @@ export class AppService {
   }
   async inspect(id: string): Promise<Project> {
     this.integrations.assertAvailable(id);
-    const project = this.project(id); const result = await inspectProject(project.rootPath);
-    if (result.rootPath !== project.rootPath) throw new AppError('PROJECT_MOVED', '프로젝트 폴더의 실제 경로가 바뀌었습니다. 새 위치를 등록해 주세요.');
+    const project = this.project(id); const result = await inspectProject(project.engine === 'unknown' ? await resolveProjectRoot(project.rootPath) : project.rootPath);
+    if (result.rootPath !== project.rootPath && project.engine !== 'unknown') throw new AppError('PROJECT_MOVED', '프로젝트 폴더의 실제 경로가 바뀌었습니다. 새 위치를 등록해 주세요.');
+    if (this.protectedProjectRoots().some(root => within(result.rootPath, root) || within(root, result.rootPath))) throw new AppError('PROTECTED_DIRECTORY', '운영 데이터 폴더는 프로젝트로 연결할 수 없습니다.');
+    if (this.store.list<Project>('project').some(p => p.id !== id && p.rootPath === result.rootPath)) throw new AppError('PROJECT_DUPLICATE', '이미 등록한 프로젝트 폴더입니다.', 409);
     const updated = { ...project, ...result, updatedAt: now() };
     this.store.put('project', id, updated);
     this.store.addEvent({ projectId: id, kind: 'project.inspected', message: `${project.name} 검사: 오류 ${result.findings.filter(f => f.severity === 'error').length}건` });
@@ -308,16 +312,18 @@ export class AppService {
   }
   async saveBuildCredential(input: unknown, id?: string) { return this.lock('build-keys', () => this.buildKeys.save(input, id)); }
   async removeBuildCredential(id: string) { return this.lock('build-keys', () => this.buildKeys.remove(id)); }
-  private newConnection(data: Record<string, unknown>, id = randomUUID()): Connection {
+  private newConnection(data: Record<string, unknown>, id: string = randomUUID()): Connection {
     const provider = providerValue(data.provider); const connector = this.connector(provider); const at = now();
-    return { id, provider, label: text(data.label, '연결 이름', 100), accountId: text(data.accountId, '계정 ID', 200),
+    const accountId = text(data.accountId, '계정 ID', 200);
+    if (provider === 'google-ads' && !/^\d+$/.test(accountId.replace(/-/g, ''))) throw new AppError('INVALID_INPUT', 'Google Ads 고객 ID는 숫자입니다. 계정 이름 대신 Google Ads에 표시된 고객 ID를 입력해 주세요.');
+    return { id, provider, label: text(data.label, '연결 이름', 100), accountId,
       authKind: connector.capability.authKind, credentialFields: [], status: 'unverified', lastCheckedAt: null, lastError: null,
       createdAt: at, updatedAt: at };
   }
   private validateCredentialFields(connection: Connection, credentials: Record<string, string>, oauth = false): void {
     const capability = this.connector(connection.provider).capability;
     for (const field of capability.fields) {
-      if (field.required && !credentials[field.key] && !(oauth && ['refreshToken', 'serviceAccountJson'].includes(field.key))) {
+      if (field.required && !credentials[field.key] && !(oauth && ['refreshToken', 'serviceAccountJson', ...(connection.provider === 'admob' ? ['publisherId'] : [])].includes(field.key))) {
         throw new AppError('INVALID_CREDENTIALS', `${field.label} 항목을 입력해 주세요.`);
       }
     }
@@ -370,7 +376,17 @@ export class AppService {
   }
   async updateCredentials(id: string, input: unknown): Promise<Connection> {
     return this.lock(id, async () => {
-      const connection = this.connection(id); const next = credentialValues(object(input).credentials);
+      const data = object(input);
+      let connection = this.connection(id);
+      const next = credentialValues(data.credentials);
+      if (data.accountId !== undefined && data.accountId !== connection.accountId) {
+        // Repair legacy names accepted as Ads customer IDs, without allowing a
+        // working connection (and its queued writes) to be retargeted.
+        if (connection.provider !== 'google-ads' || /^\d+$/.test(connection.accountId.replace(/-/g, ''))) throw new AppError('ACCOUNT_MISMATCH', '다른 계정은 새 연결로 등록해 주세요.', 409);
+        if (this.store.runs(100_000).some(r => r.connectionId === id && !['succeeded', 'failed', 'cancelled'].includes(r.status)) || [...this.oauth.values()].some(p => p.connection.id === id && p.expiresAt > Date.now())) throw new AppError('CONNECTION_BUSY', '진행 중인 연결 작업을 완료하거나 취소한 뒤 고객 ID를 수정해 주세요.', 409);
+        const validated = this.newConnection({ provider: connection.provider, label: connection.label, accountId: data.accountId }, id);
+        connection = { ...connection, accountId: validated.accountId.replace(/-/g, '') };
+      }
       let previous: Record<string, string> = {};
       try { previous = await this.vault.get(id); } catch (error) { if ((error as { code?: string }).code !== 'credential_not_found') throw error; }
       const credentials = { ...previous, ...next }; this.validateCredentialFields(connection, credentials);
@@ -545,19 +561,41 @@ export class AppService {
       ...(data.externalId ? {externalId:text(data.externalId,'서비스의 리소스 ID',200)} : {}),
     });
   }
+  async oauthConfiguration() {
+    const connections = this.store.list<Connection>('connection');
+    const available = (await this.vault.status()).available;
+    return Promise.all(OAUTH_PROVIDERS.map(async provider => {
+      const client = available ? await resolveOAuthClient(provider, connections, this.vault) : null;
+      return { provider, available: Boolean(client), source: client?.source };
+    }));
+  }
+  async registerGoogleOAuthApp(input: unknown): Promise<{ registered: true }> {
+    if (this.options.mode === 'demo') throw new AppError('DEMO_AUTH', 'Google OAuth 앱은 실제 모드에서 등록해 주세요.');
+    const client = object(object(input).client);
+    if (!client.installed || client.web || client.type) throw new AppError('INVALID_INPUT', 'Google Cloud에서 받은 데스크톱 앱 클라이언트 JSON을 선택해 주세요.');
+    const installed = object(client.installed);
+    const clientId = text(installed.client_id, 'Google OAuth 클라이언트 ID', 500);
+    if (!/^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(clientId)) throw new AppError('INVALID_INPUT', 'Google OAuth 클라이언트 ID 형식을 확인해 주세요.');
+    const clientSecret = installed.client_secret === undefined ? undefined : text(installed.client_secret, 'Google OAuth 클라이언트 시크릿', 2000);
+    const status = await this.vault.status();
+    if (!status.available) throw new AppError('VAULT_UNAVAILABLE', status.reason ?? 'OS 보관함을 사용할 수 없습니다.');
+    // Keep each account's original client/token pair intact when replacing the shared app.
+    await this.vault.set(GOOGLE_OAUTH_APP_ID, { clientId, ...(clientSecret ? { clientSecret } : {}) });
+    return { registered: true };
+  }
   async beginOAuth(input: unknown, redirectUri: string, id?: string): Promise<{ connectionId: string; authorizationUrl: string }> {
     const data = object(input);
-    const connection = id ? this.connection(id) : this.newConnection(data);
+    const connection = id ? this.connection(id) : this.newConnection({ ...data, accountId: data.accountId || (['admob', 'google-play'].includes(String(data.provider)) ? 'auto' : data.accountId) });
     const scopes = GOOGLE_SCOPES[connection.provider];
     if (!scopes) throw new AppError('UNSUPPORTED_AUTH', 'Google OAuth로 연결하는 서비스가 아닙니다.');
     const status = await this.vault.status();
     if (!status.available) throw new AppError('VAULT_UNAVAILABLE', status.reason ?? 'OS 보관함을 사용할 수 없습니다.');
-    const credentials = id ? await this.vault.get(id) : credentialValues(data.credentials);
+    const credentials = id ? await this.vault.get(id) : await oauthCredentials(connection.provider, credentialValues(data.credentials ?? {}), this.store.list<Connection>('connection'), this.vault);
     this.validateCredentialFields(connection, credentials, true);
     const clientId = text(credentials.clientId, 'Google OAuth 클라이언트 ID', 500);
     for (const [state, pending] of this.oauth) if (pending.expiresAt <= Date.now()) this.oauth.delete(state);
     if (this.oauth.size >= 100) throw new AppError('TOO_MANY_AUTH_REQUESTS', '진행 중인 계정 연결을 먼저 완료해 주세요.');
-    const begun = this.broker.begin({ clientId, clientSecret: credentials.clientSecret, redirectUri, scopes });
+    const begun = this.broker.begin({ clientId, clientSecret: credentials.clientSecret, redirectUri, scopes: connection.provider === 'google-play' && (connection.accountId === 'auto' || credentials.googleSubject) ? [...scopes, 'openid'] : scopes });
     this.oauth.set(begun.state, { connection, credentials, expiresAt: Date.now() + 600_000, existing: Boolean(id) });
     return { connectionId: connection.id, authorizationUrl: begun.authorizationUrl };
   }
@@ -566,7 +604,7 @@ export class AppService {
     const connection = id ? this.connection(id) : this.newConnection({ ...data, provider, accountId: data.accountId || 'auto' });
     if (connection.provider !== provider) throw new AppError('PROVIDER_MISMATCH', '선택한 연결 서비스가 일치하지 않습니다.');
     const status = await this.vault.status(); if (!status.available) throw new AppError('VAULT_UNAVAILABLE', status.reason ?? 'OS 보관함을 사용할 수 없습니다.');
-    const credentials = { ...(id ? await this.vault.get(id) : {}), ...(data.credentials ? credentialValues(data.credentials) : {}) };
+    const credentials = id ? { ...await this.vault.get(id), ...(data.credentials ? credentialValues(data.credentials) : {}) } : await oauthCredentials(provider, credentialValues(data.credentials ?? {}), this.store.list<Connection>('connection'), this.vault);
     for (const [state, pending] of this.socialOAuth) if (pending.expiresAt <= Date.now()) this.socialOAuth.delete(state);
     if (this.socialOAuth.size >= 100) throw new AppError('TOO_MANY_AUTH_REQUESTS', '진행 중인 연결을 먼저 완료해 주세요.');
     const begun = this.socialBrokers[provider].begin({ clientId: text(credentials.clientId, 'OAuth 앱 ID', 500), clientSecret: credentials.clientSecret, redirectUri });
@@ -594,7 +632,31 @@ export class AppService {
   async completeOAuth(state: string, code: string): Promise<Connection> {
     const pending = this.oauth.get(state); this.oauth.delete(state);
     if (!pending || pending.expiresAt < Date.now()) throw new AppError('OAUTH_EXPIRED', '계정 연결 요청이 만료되었습니다.');
-    const authorized = await this.broker.complete({ state, code });
+    const authorized = await this.broker.complete({ state, code }, async accessToken => {
+      if (pending.connection.accountId !== 'auto' && !pending.credentials.googleSubject) return;
+      if (pending.connection.provider === 'google-play') {
+        const response = await (this.options.fetch ?? fetch)('https://openidconnect.googleapis.com/v1/userinfo', {
+          headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(30_000), redirect: 'error',
+        });
+        if (!response.ok) throw new AppError('ACCOUNT_DISCOVERY_FAILED', '로그인한 Google 계정을 확인하지 못했습니다. 다시 연결해 주세요.');
+        const data = await response.json() as { sub?: string };
+        const subject = text(data.sub, 'Google 계정 식별자', 200);
+        if (pending.credentials.googleSubject && pending.credentials.googleSubject !== subject) throw new AppError('ACCOUNT_MISMATCH', '기존 연결과 다른 Google 계정으로 로그인했습니다. 기존 계정으로 다시 연결해 주세요.');
+        pending.credentials.googleSubject = subject;
+        pending.connection.accountId = subject;
+        return;
+      }
+      if (pending.connection.provider !== 'admob') return;
+      const response = await (this.options.fetch ?? fetch)('https://admob.googleapis.com/v1/accounts', {
+        headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(30_000), redirect: 'error',
+      });
+      if (!response.ok) throw new AppError('ACCOUNT_DISCOVERY_FAILED', 'AdMob 계정을 조회하지 못했습니다. AdMob 가입 상태와 API 권한을 확인해 주세요.');
+      const data = await response.json() as { account?: { publisherId?: string }[]; nextPageToken?: string };
+      const accounts = data.account ?? [];
+      if (accounts.length !== 1 || data.nextPageToken || !/^pub-\d+$/.test(accounts[0]?.publisherId ?? '')) throw new AppError('ACCOUNT_SELECTION_REQUIRED', 'AdMob 계정을 하나로 확인하지 못했습니다. 직접 설정에서 publisher ID를 지정해 주세요.');
+      pending.connection.accountId = accounts[0]!.publisherId!;
+      pending.credentials.publisherId = pending.connection.accountId;
+    });
     return this.lock(pending.connection.id, async () => {
       if (pending.existing) this.connection(pending.connection.id);
       const credentials = { ...pending.credentials, ...authorized };

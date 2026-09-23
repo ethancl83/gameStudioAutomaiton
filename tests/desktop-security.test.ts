@@ -30,6 +30,8 @@ test('허용된 API 경로만 통과한다', () => {
   assert.equal(isAllowedApiPath('POST', '/connections/c1/actions'), true);
   // OAuth 온보딩·재인증, 자격 증명 수정, 외부 쓰기 재조정
   assert.equal(isAllowedApiPath('POST', '/oauth/google/start'), true);
+  assert.equal(isAllowedApiPath('PUT', '/oauth/google/app'), true);
+  assert.equal(isAllowedApiPath('GET', '/oauth/google/app'), false);
   assert.equal(isAllowedApiPath('POST', '/connections/c1/oauth/start'), true);
   assert.equal(isAllowedApiPath('PUT', '/connections/c1/credentials'), true);
   assert.equal(isAllowedApiPath('POST', '/runs/r-1/reconcile'), true);

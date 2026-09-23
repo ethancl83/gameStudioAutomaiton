@@ -73,9 +73,9 @@ function campaignResource(row: Record<string, unknown>, currency: string): Resou
   };
 }
 
-async function customerInfo(ctx: ConnectorContext): Promise<{ id: string; currency: string; timeZone: string; name: string }> {
+async function customerInfo(ctx: ConnectorContext): Promise<{ id: string; currency: string; timeZone: string; name: string; manager: boolean }> {
   const id = customerId(ctx);
-  const rows = await search<Record<string, unknown>>(ctx, 'SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone FROM customer');
+  const rows = await search<Record<string, unknown>>(ctx, 'SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer');
   const customer = (rows[0]?.customer ?? {}) as Record<string, unknown>;
   const currency = typeof customer.currencyCode === 'string' ? customer.currencyCode : '';
   if (!currency) throw new AppError('INVALID_PROVIDER_RESPONSE', 'Google Ads 계정 통화를 확인할 수 없습니다.');
@@ -84,11 +84,30 @@ async function customerInfo(ctx: ConnectorContext): Promise<{ id: string; curren
     currency,
     timeZone: String(customer.timeZone ?? ''),
     name: String(customer.descriptiveName ?? ''),
+    manager: customer.manager === true,
   };
+}
+
+async function readManager(ctx: ConnectorContext, info: Awaited<ReturnType<typeof customerInfo>>, includeSpend: boolean): Promise<ConnectorResult> {
+  // customer_client includes indirect clients too. Metrics must be queried on
+  // each advertiser, with the manager retained as login-customer-id.
+  const rows = await search<Record<string, unknown>>(ctx, 'SELECT customer_client.id FROM customer_client WHERE customer_client.manager = FALSE AND customer_client.status = \'ENABLED\'');
+  const ids = [...new Set(rows.map(row => digits(String((row.customerClient as { id?: string })?.id ?? ''), '하위 광고 계정 ID')))];
+  if (ids.length > 100) throw new AppError('PAGINATION_LIMIT', '하위 광고 계정이 너무 많습니다. 광고 계정을 개별 연결해 주세요.');
+  const resources: ResourceInput[] = [];
+  const metrics: NonNullable<ConnectorResult['metrics']> = [];
+  for (const id of ids) {
+    const child: ConnectorContext = { ...ctx, connection: { ...ctx.connection, accountId: id }, credentials: { ...ctx.credentials, loginCustomerId: ctx.credentials.loginCustomerId || info.id } };
+    const listed = await listCampaigns(child);
+    for (const resource of listed.resources ?? []) resources.push({ ...resource, externalId: `${id}:${resource.externalId}`, data: { ...resource.data, customerId: id, managerCustomerId: info.id, readOnly: true } });
+    if (includeSpend) metrics.push(...((await spendMetrics(child)).metrics ?? []));
+  }
+  return { resources, resourceSnapshots: [{ kind: 'campaign' }], ...(includeSpend ? { metrics } : {}), summary: { customerId: info.id, manager: true, accountCount: ids.length, campaignCount: resources.length, ...(includeSpend ? { spendRows: metrics.length } : {}) } };
 }
 
 async function listCampaigns(ctx: ConnectorContext): Promise<ConnectorResult> {
   const info = await customerInfo(ctx);
+  if (info.manager) return readManager(ctx, info, false);
   const rows = await search<Record<string, unknown>>(ctx, `SELECT campaign.id, campaign.name, campaign.status, campaign.resource_name, campaign.advertising_channel_type, campaign.advertising_channel_sub_type, campaign.campaign_budget, campaign.app_campaign_setting.app_id, campaign.app_campaign_setting.app_store, campaign_budget.resource_name, campaign_budget.amount_micros, campaign_budget.explicitly_shared FROM campaign WHERE campaign.status != 'REMOVED'`);
   const resources = rows.map(row => campaignResource(row, info.currency));
   return { resources, resourceSnapshots: [{ kind: 'campaign' }], summary: { customerId: info.id, currency: info.currency, timeZone: info.timeZone, campaignCount: resources.length } };
@@ -378,10 +397,13 @@ export const googleAdsConnector: Connector = {
     }
     if (operation === 'list-campaigns') return listCampaigns(ctx);
     if (operation === 'sync') {
+      const info = await customerInfo(ctx);
+      if (info.manager) return readManager(ctx, info, true);
       const listed = await listCampaigns(ctx);
       const spend = await spendMetrics(ctx);
       return { resources: listed.resources, resourceSnapshots: listed.resourceSnapshots, metrics: spend.metrics, summary: { ...listed.summary, spendRows: spend.summary.rowCount } };
     }
+    if (['create-campaign', 'create-creative', 'update-campaign', 'pause-campaign'].includes(operation) && (await customerInfo(ctx)).manager) throw new AppError('ADVERTISER_ACCOUNT_REQUIRED', '관리자 연결은 하위 계정 조회용입니다. 캠페인을 변경하려면 해당 광고 계정을 별도로 연결해 주세요.');
     if (operation === 'create-campaign') return createCampaign(input, ctx);
     if (operation === 'create-creative') return createCreative(input, ctx);
     if (operation === 'update-campaign') return updateCampaign(input, ctx);

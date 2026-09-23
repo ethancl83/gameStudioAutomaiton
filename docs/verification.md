@@ -144,3 +144,28 @@ Sol의 초기 구현 리뷰 9건 및 후속 기반 6건을 수정·검증했다.
 실서비스 계정·권한·업로드·심사·광고 집행·SNS 게시, macOS/Windows 실행·격리·서명, Unity/Unreal 라이선스·프로젝트, 설치 가능한 Android 앱·기기·APK build-tools 실행, OS 재부팅·장비 이전·30일 관찰은 미검증이다. Android 서명 검사의 입력은 JAR 형식 테스트 산출물이며 실제 설치 가능한 앱을 증명하지 않는다.
 
 Steam 공지 쓰기·신규 앱의 필수 Console 단계, macOS/Windows 내장 격리, Apple 스크린샷/프리뷰·pkg, 게임 내부 광고/결제 SDK 설치, 고급 미디에이션·기여 분석, 자동 시작·업데이트와 전체 장비/비밀 백업은 [연동 기능표](integration-capabilities.md)와 [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md)에 남겨 두었다. 전체 계획의 수용 검사를 완료한 출시 버전으로 표시하지 않는다.
+
+## 2026-09-23 운영준비·프로젝트 탐색·OAuth UX
+
+- 전체 macOS 검사: 508개 중 493 통과, 실패 0, 환경 skip 15. 실제 공식 4.7.2 바이너리를 `APPOPS_GODOT`로 지정했다. 후속 계정 동일성/경로 탐색 및 ZIP 회귀 검사와 타입·빌드도 통과했다.
+- Godot 4.7.2·Temurin 21.0.12.1+1을 macOS ARM64 장비의 격리된 검증 경로에 공식 해시로 실설치했다. Android command-line tools 15859902(156,083,281바이트)의 공식 체크섬과 압축 해제를 실검증했다. 최초 실패한 ZIP 중첩 JAR 오인을 중앙 디렉터리 기반 범위 추출로 수정하고 descriptor/stored/빈 항목·CRC·크기·로컬 파일명·잘린 스트림·취소를 회귀 검증했다.
+- ZIP 처리 설계만 구현과 분리된 세션에서 독립 검토했다. descriptor의 local size=0, 바이트 범위·겹침, inflate 소비량, 빈 파일·디렉터리, 실패 자원 정리 조건을 반영했다. 전체 작업의 검토는 자체 검토다.
+- Electron 실제/데모에서 탭·공급자/AI 버튼, 자동 감지 상태, 파일 선택→경로 저장→검사, 잘못된 경로 오류, OAuth JSON 가져오기, 기존 앱 설정 자동 재사용 및 수동 전환, 1360×868/1000×728 화면을 확인했다. 클릭·키보드 입력·파일 입력으로 조작했고 초기 화면과 작은 창에서 주요 버튼 잘림·가로 넘침을 확인했다. UI 인증 검증에는 별도 데이터 디렉터리의 합성 앱 자격 증명만 사용했다.
+- 실제 등록 경로 읽기 검증: `kingdoms/samAstra/godot` 탐색 성공, SEED3 Godot Android 템플릿 경고 없음. `inkbound`에는 지원 대상 엔진 파일이 없어 unknown이 유지된다. 사용자 프로젝트 원본과 실제 계정은 변경하지 않았다.
+- 제한: 실제 공급자 브라우저 인증 완료, Android 라이선스 동의 후 플랫폼/빌드 도구 전체 설치, 새 Linux 러너 이미지 빌드 및 다른 OS 실설치는 수행하지 않았다. 공용 OAuth 클라이언트는 제공되지 않았으므로 최초 앱 등록은 여전히 필요하다. 이전 4.3 검증 캐시를 사용하려면 갱신 준비 스크립트를 실행하거나 `APPOPS_GODOT`에 4.7.2 경로를 지정해야 한다.
+- 로그·화면: `tmp/operational-fixes-20260923/`의 `all-tests-final.log`, `regression-final.log`, `build.log`, `live-install*.log`, `setup-final.png`, `setup-compact.png`, `oauth-reuse.png`, `oauth-compact.png`.
+
+## 2026-09-23 Google 공통 앱 등록·실계정 접근 검사
+
+- 계정 연결 상단에 독립적인 Google OAuth 앱 등록을 추가했다. 등록 콘솔 열기→데스크톱 JSON 가져오기→공통 보관함 저장으로 Google Play/Google Ads/AdMob에 재사용한다. 기존 계정 토큰과 앱 설정은 교체 시에도 보존한다. 서버는 웹/서비스 계정 JSON과 데모 저장을 거부하고 공개 API에는 비밀을 반환하지 않는다.
+- 검증: controller/desktop-security/transport 41/41, 타입·빌드 통과. Electron에서 데모 비활성화, 웹/잘못된 JSON 거부, 공통 등록 저장, 계정 폼 입력 보존, 세 Google 공급자의 클라이언트 필드 제거/설정 재사용, 재시작 유지, 1000×728 배치를 확인했다. 테스트 데이터는 정리했다.
+- 실제 사용자가 받은 JSON을 OS 보관함으로 보호된 공통 등록에 저장했다. 기존 Google Play와 Google Ads 연결의 갱신 토큰으로 실제 액세스 토큰 발급에 성공했다. 새 브라우저 로그인 전체 흐름을 완료했다는 의미는 아니다.
+- 초기 실측은 Play/Ads 모두 `SERVICE_DISABLED`였다. 이후 사용자 승인 범위에서 Cloud API를 사용 설정하고 Ads 탐색자 액세스를 신청했다. 외부 콘솔 성공과 앱 검증을 구분하며, 최종 결과는 아래 Electron 실제 화면 테스트를 근거로 한다.
+- 2026-09-24 Electron 실제 모드: 계정 연결 화면에서 Play 검사 성공, Ads 레거시 계정 이름을 `고객 ID 수정`으로 숫자 ID로 저장한 뒤 검사 성공. 기존 OAuth 토큰은 보존했다. 정상 계정의 임의 재지정, 중복 계정, 실행 중 작업/재인증 중 ID 변경은 거부한다.
+- Seed2 원인은 Godot macOS/iOS 프리셋이 Android보다 먼저 나오는 경우 다른 플랫폼의 ID가 대표 식별자로 선택되는 것이었다. Android가 있으면 Android 패키지를 우선하며 원본 프로젝트는 수정하지 않았다. Electron `다시 검수`로 `com.dermolabs.seed2`를 확인했다.
+- Electron `스토어 배포 → 출시 조회 → 프로젝트 선택 → 실행`을 Seed2/SEED3 각각 실행했다. 최종 이력 성공 및 표에서 Seed2 `v1.0.5 / internal / 105`, SEED3 `v0.9.1 / internal / 38`을 확인했다. 두 앱 모두 `RELEASE_LIFECYCLE_STATE_PUBLISHED`다.
+- Electron 마케팅 동기화에서 관리자 계정 자체에 metrics를 요청하는 HTTP 400을 재현·수정했다. 관리자 연결은 `customer_client`의 활성 하위 광고 계정을 찾아 해당 ID와 관리자 로그인 헤더로 조회한다. 고객별 리소스 ID·통화·metric sourceId를 분리하며 하위 조회 실패는 전체 실패로 반환한다. 관리자 연결의 외부 변경은 차단하고 UI에 개별 광고 계정 연결 안내를 표시한다. [공식 customer_client 계약](https://developers.google.com/google-ads/api/fields/v25/customer_client).
+- 수정 후 Electron `운영 준비 → 앱·서비스 → 다시 시작` 성공, 마케팅 `동기화` 최종 성공: 하위 계정 1개, 캠페인 12개, 최근 7일 광고비 행 0개. 목록 화면과 이력 상세를 확인했다. 앱 출시·광고 집행·예산 변경은 수행하지 않았다.
+- 도구: Codex Computer Use로 계정 검사·고객 ID 수정·Seed2 재검수를 수행했다. Electron 기본 선택 메뉴 입력이 불안정해 이후 Playwright의 동일 Electron 창 UI 조작으로 출시 조회·Ads 동기화·최종 결과를 검증했다. 별도 API probe는 진단용이며 앱 수용 근거로 대체하지 않았다. 최종 앱 창은 사용자가 확인할 수 있도록 열어 두었다.
+- 추가 회귀: controller/engines/transport 44/44, marketing-connectors/marketing-social-extensions/operational-fixes 31/31. 타입·빌드·diff 검사 통과. macOS 실제 UI에서 1360×868 화면의 가로 넘침 없음과 조회 결과를 확인했다. 새 브라우저 OAuth 동의·콜백 전체 재실행, 외부 쓰기, 다른 OS와 Android SDK 전체 구성 요소 설치는 이번 실계정 검사 범위 밖이다.
+- 근거: `tmp/google-live-20260923/regression.log`, `api-disabled.png`, `electron-play-releases.png`, `electron-ads-sync.png`, `electron-ads-campaigns.png`, `app-fixes-tests.log`, `ads-manager-tests.log`; UI QA는 `tmp/operational-fixes-20260923/google-app-*.png`와 `google-app-qa.txt`. 등록 원본 `client_secret_*.json`은 Git 제외 패턴을 추가했으며 비밀값은 출력하지 않았다.

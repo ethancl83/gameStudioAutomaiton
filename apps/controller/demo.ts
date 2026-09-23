@@ -1,3 +1,4 @@
+import { GODOT_VERSION } from '../../packages/setup/catalog.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
@@ -25,7 +26,7 @@ export class DemoService extends AppService {
   constructor(store: Store, readonly demoRoot: string) {
     super(store, new CredentialVault(join(store.directory, 'credentials'), { keyProvider: demoKeyProvider }), {
       mode: 'demo', fetch: noNetwork, backupVaultFactory: createDemoVault, connectors: connectors.map(connector => demoConnector(connector, store)),
-      scanToolchains: async () => ['Godot 4.3', 'Unity 6', 'Unreal 5.5', 'Android SDK', 'Xcode 16', 'SteamCMD'].map(name => ({ name, executable: 'demo', version: name.split(' ').slice(1).join(' '), available: true })),
+      scanToolchains: async () => ['godot', 'godot-export-templates', 'unity', 'unreal-uat', 'unreal-engine-root', 'android-sdk-validated', 'jdk-home', 'gradle-offline-cache', 'xcodebuild', 'steamcmd'].map(name => ({ name, executable: '/demo/tools/' + name, version: name === 'godot' ? GODOT_VERSION : null, available: true })),
     });
   }
   async seed(): Promise<void> {

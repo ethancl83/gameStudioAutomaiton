@@ -1,3 +1,5 @@
+import { GoogleOAuthAppModal } from '../components/GoogleOAuthAppModal';
+import { ProviderPicker } from '../components/ProviderPicker';
 import { AgentRequestButton } from '../components/AgentActions';
 // 계정 연결: 최초 1회 연결(Google OAuth 또는 수동/서비스 계정), 상태 검사, 재연결, 자격 증명 수정, 해제.
 // - 비밀 값은 화면 상태에만 두고 제어 서비스로 전송하며, 화면/로그에 다시 노출하지 않는다.
@@ -53,14 +55,42 @@ function needsReconnect(status: Connection['status']): boolean {
   return status === 'action_required' || status === 'permission_required';
 }
 
+type OAuthAppConfiguration = { provider: Provider; available: boolean; source?: string }[];
+
 export function ConnectionsView({ state, refresh }: { state: AppState; refresh: () => Promise<void> }) {
   const [addOpen, setAddOpen] = useState(false);
+  const [googleAppOpen, setGoogleAppOpen] = useState(false);
+  const [oauthApps, setOauthApps] = useState<OAuthAppConfiguration>([]);
+  const [configError, setConfigError] = useState<string | null>(null);
+  async function loadOAuthApps() {
+    if (api.isDemo()) return;
+    const result = await api.oauthConfiguration();
+    if (result.ok) { setOauthApps(result.data); setConfigError(null); }
+    else setConfigError(result.error.message);
+  }
+  const connectionAppsKey = state.connections.map(connection => `${connection.id}:${connection.updatedAt}`).join('|');
+  useEffect(() => { void loadOAuthApps(); }, [connectionAppsKey]);
+  const googleApp = oauthApps.find(app => app.provider === 'google-play' && app.available);
 
   const actionNeeded = state.connections.filter((c) => needsReconnect(c.status));
 
   return (
     <div className="stack">
       <VaultBanner state={state} />
+      <Card>
+        <div className="row row--between">
+          <div>
+            <div className="section-title"><KeyRound size={16} /> Google OAuth 앱</div>
+            <p className="small muted" style={{ margin: '6px 0 0' }}>
+              {api.isDemo() ? '실제 모드에서 등록할 수 있습니다.' : googleApp ? `사용 가능 · ${googleApp.source}` : '최초 한 번 등록 · Google Play·Google Ads·AdMob 공통 사용'}
+            </p>
+          </div>
+          <button className="btn" onClick={() => setGoogleAppOpen(true)} disabled={api.isDemo() || !state.vault.available}>
+            <KeyRound size={15} /> {googleApp ? 'Google 앱 설정' : 'Google OAuth 앱 등록'}
+          </button>
+        </div>
+        {configError && <Notice tone="error">{configError}<button className="btn btn--sm" onClick={() => void loadOAuthApps()}>다시 확인</button></Notice>}
+      </Card>
 
       {actionNeeded.length > 0 && (
         <Notice tone="warn" title={`조치가 필요한 연결 ${actionNeeded.length}건`}>
@@ -105,7 +135,8 @@ export function ConnectionsView({ state, refresh }: { state: AppState; refresh: 
         </Notice>
       )}
 
-      {addOpen && <AddConnectionModal state={state} refresh={refresh} onClose={() => setAddOpen(false)} />}
+      {addOpen && <AddConnectionModal state={state} refresh={refresh} oauthApps={oauthApps} reloadOAuthApps={loadOAuthApps} onClose={() => setAddOpen(false)} />}
+      {googleAppOpen && <GoogleOAuthAppModal onClose={() => setGoogleAppOpen(false)} onSaved={loadOAuthApps} />}
     </div>
   );
 }
@@ -154,7 +185,8 @@ function ConnectionCard({ conn, state, refresh }: { conn: Connection; state: App
   // 데모: 자격 증명 재입력/OAuth 없이 상태 검사로 복구한다(루트 데모 어댑터가 전이).
   const demo = api.isDemo();
   const showReconnect = !demo && isOAuthProvider(conn.provider) && needsReconnect(conn.status);
-  const showRepair = !demo && needsReconnect(conn.status) && !!cap && cap.fields.length > 0;
+  const invalidAdsAccount = conn.provider === 'google-ads' && !/^\d+$/.test(conn.accountId.replace(/-/g, ''));
+  const showRepair = !demo && !!cap && (invalidAdsAccount || needsReconnect(conn.status) && cap.fields.length > 0);
   const showDemoRecover = demo && needsReconnect(conn.status);
 
   return (
@@ -215,7 +247,7 @@ function ConnectionCard({ conn, state, refresh }: { conn: Connection; state: App
           )}
           {showRepair && (
             <button className="btn btn--sm" onClick={() => setRepairOpen(true)}>
-              <Wrench size={13} /> 자격 증명 수정
+              <Wrench size={13} /> {invalidAdsAccount ? '고객 ID 수정' : '자격 증명 수정'}
             </button>
           )}
           <button className="btn btn--sm btn--danger" onClick={() => setConfirmDelete(true)}>
@@ -394,22 +426,25 @@ function RepairCredentialsModal({
   onClose: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
+  const repairAccount = conn.provider === 'google-ads' && !/^\d+$/.test(conn.accountId.replace(/-/g, ''));
+  const [accountId, setAccountId] = useState('');
+  const validAccount = /^\d+$/.test(accountId.trim().replace(/-/g, ''));
   const repair = useAction<Connection>(refresh);
 
   // 입력한 필드만 서버에 병합 전송한다. 저장된 기존 값은 서버가 노출하지 않는다.
   const provided = Object.entries(values).filter(([, v]) => v.trim() !== '');
 
   async function submit() {
-    if (provided.length === 0) return;
+    if (repairAccount ? !validAccount : provided.length === 0) return;
     const payload: Record<string, string> = {};
     for (const [k, v] of provided) payload[k] = v;
-    const res = await repair.run(() => api.repairCredentials(conn.id, payload));
+    const res = await repair.run(() => api.repairCredentials(conn.id, payload, repairAccount ? accountId.trim() : undefined));
     if (res?.ok) onClose();
   }
 
   return (
     <Modal
-      title="자격 증명 수정"
+      title={repairAccount ? 'Google Ads 고객 ID 수정' : '자격 증명 수정'}
       onClose={onClose}
       wide
       footer={
@@ -417,13 +452,17 @@ function RepairCredentialsModal({
           <button className="btn" onClick={onClose}>
             취소
           </button>
-          <button className="btn btn--primary" onClick={() => void submit()} disabled={repair.pending || provided.length === 0}>
+          <button className="btn btn--primary" onClick={() => void submit()} disabled={repair.pending || (repairAccount ? !validAccount : provided.length === 0)}>
             {repair.pending ? <Spinner /> : <Wrench size={15} />} 병합 저장
           </button>
         </>
       }
     >
       <div className="stack" style={{ gap: 12 }}>
+        {repairAccount ? <>
+          <Notice tone="info">기존 Google 로그인은 유지됩니다. 계정 이름 대신 Google Ads의 숫자 고객 ID를 입력해 주세요.</Notice>
+          <Field label="Google Ads 고객 ID" htmlFor="repair-account-id"><input id="repair-account-id" className="input mono" value={accountId} onChange={e => setAccountId(e.target.value)} placeholder="123-456-7890" /></Field>
+        </> : <>
         <Notice tone="info">
           취소·만료된 키만 새로 입력하세요. 입력한 값만 병합 저장되며, 저장된 기존 값은 화면에 표시되지 않습니다. 비우면
           해당 항목은 변경하지 않습니다.
@@ -431,6 +470,7 @@ function RepairCredentialsModal({
         {cap.fields.map((f) => (
           <CredentialInput key={f.key} field={f} value={values[f.key] ?? ''} onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))} />
         ))}
+        </>}
         {repair.error && <Notice tone="error" title="자격 증명 저장 실패">{repair.error.message}</Notice>}
       </div>
     </Modal>
@@ -439,8 +479,10 @@ function RepairCredentialsModal({
 
 type Mode = 'oauth' | 'manual';
 
-function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refresh: () => Promise<void>; onClose: () => void }) {
+function AddConnectionModal({ state, refresh, onClose, oauthApps, reloadOAuthApps }: { state: AppState; refresh: () => Promise<void>; onClose: () => void; oauthApps: OAuthAppConfiguration; reloadOAuthApps: () => Promise<void> }) {
   const [provider, setProvider] = useState<Provider | ''>('');
+  const [googleAppOpen, setGoogleAppOpen] = useState(false);
+  const [customClient, setCustomClient] = useState(false);
   const [mode, setMode] = useState<Mode>('oauth');
   const [label, setLabel] = useState('');
   const [accountId, setAccountId] = useState('');
@@ -471,12 +513,14 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
   const oauthCapable = provider ? isOAuthProvider(provider) : false;
   const effectiveMode: Mode = demo ? 'manual' : oauthCapable ? mode : 'manual';
   // 소셜(X/Threads)은 계정 ID를 자동 검색으로 채울 수 있어 비워둘 수 있다(서버가 정규화).
-  const accountRequired = !social;
+  const accountRequired = !social && !(effectiveMode === 'oauth' && ['admob', 'google-play'].includes(provider));
+  const savedApp = oauthApps.find(app => app.provider === provider && app.available);
+  const useSavedApp = Boolean(savedApp) && (!social || !customClient);
 
   // OAuth 온보딩에서 받는 공급자 필드(갱신 토큰·서비스 계정 키·client 값 제외).
   const onboardingFields = useMemo(
-    () => fields.filter((f) => !OAUTH_REPLACED.test(f.key) && !isClientIdKey(f.key) && !isClientSecretKey(f.key)),
-    [fields],
+    () => fields.filter((f) => !OAUTH_REPLACED.test(f.key) && !isClientIdKey(f.key) && !isClientSecretKey(f.key) && !(provider === 'admob' && f.key === 'publisherId')),
+    [fields, provider],
   );
   const capClientId = fields.find((f) => isClientIdKey(f.key));
   const capClientSecret = fields.find((f) => isClientSecretKey(f.key));
@@ -485,7 +529,11 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
 
   function resetForProvider(p: Provider | '') {
     setProvider(p);
-    setCredentials({});
+    setLabel(p ? `${providerLabel(p)} 계정` : '');
+    setAccountId('');
+    setCustomClient(false);
+    const androidApps = state.projects.filter(project => project.targets.includes('android') && project.appIdentifier);
+    setCredentials(p === 'google-play' && androidApps.length === 1 ? { packageName: androidApps[0].appIdentifier! } : {});
     setMode('oauth');
     setPendingId(null);
     setOpenError(null);
@@ -497,8 +545,8 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
   const oauthMissing =
     !label.trim() ||
     (accountRequired && !accountId.trim()) ||
-    !(credentials[clientIdKey] ?? '').trim() ||
-    (clientSecretRequired && !(credentials[clientSecretKey] ?? '').trim()) ||
+    (!useSavedApp && (!social || !(credentials[clientIdKey] ?? '').trim())) ||
+    (!useSavedApp && clientSecretRequired && !(credentials[clientSecretKey] ?? '').trim()) ||
     onboardingFields.some((f) => f.required && !(credentials[f.key] ?? '').trim());
 
   const manualMissing =
@@ -523,13 +571,14 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
     // OAuth 온보딩 자격 증명: clientId(필수)·clientSecret(선택)·공급자 온보딩 필드만. refreshToken/serviceAccountJson 미포함.
     const creds: Record<string, string> = {};
     const cid = (credentials[clientIdKey] ?? '').trim();
-    if (cid) creds.clientId = cid;
+    if (cid && !useSavedApp) creds.clientId = cid;
     const csecret = (credentials[clientSecretKey] ?? '').trim();
-    if (csecret) creds.clientSecret = csecret;
+    if (csecret && !useSavedApp) creds.clientSecret = csecret;
     for (const f of onboardingFields) {
       const v = (credentials[f.key] ?? '').trim();
       if (v) creds[f.key] = v;
     }
+    if (provider === 'admob' && accountId.trim()) creds.publisherId = accountId.trim();
     const res = await oauth.run(() =>
       social
         ? api.startSocialOAuth(provider as 'x' | 'threads', {
@@ -553,6 +602,8 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
       setPendingId(res.data.connectionId);
     }
   }
+
+  if (googleAppOpen) return <GoogleOAuthAppModal onClose={() => setGoogleAppOpen(false)} onSaved={reloadOAuthApps} />;
 
   return (
     <Modal
@@ -606,16 +657,8 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
           />
         ) : (
           <>
-            <Field label="공급자" required htmlFor="conn-provider">
-              <select id="conn-provider" className="select" value={provider} onChange={(e) => resetForProvider(e.target.value as Provider)}>
-                <option value="">공급자 선택</option>
-                {providerOptions.map((c) => (
-                  <option key={c.provider} value={c.provider}>
-                    {providerLabel(c.provider)} — {CAPABILITY_CATEGORY_LABELS[c.category] ?? c.category}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            <ProviderPicker label="공급자" value={provider} onChange={resetForProvider}
+              options={providerOptions.map(c => ({ id: c.provider, provider: c.provider, description: CAPABILITY_CATEGORY_LABELS[c.category] ?? c.category }))} />
 
             {cap && (
               <>
@@ -641,22 +684,25 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
                       label="계정/조직 식별자"
                       required={accountRequired}
                       htmlFor="conn-account"
-                      hint={social ? '비워두면 로그인 후 자동으로 채웁니다(선택).' : '개발자 계정 ID, 조직 ID 등.'}
+                      hint={!accountRequired ? '비워두면 로그인 후 자동으로 채웁니다.' : provider === 'google-ads' ? 'Google Ads 고객 ID. OAuth 앱 ID와 다릅니다.' : '개발자 계정 ID, 조직 ID 등.'}
                     >
-                      <input id="conn-account" className="input mono" value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder={social ? '자동 검색' : undefined} spellCheck={false} />
+                      <input id="conn-account" className="input mono" value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder={!accountRequired ? '로그인 후 자동 검색' : undefined} spellCheck={false} />
                     </Field>
                   </div>
                 </div>
 
                 {effectiveMode === 'oauth' ? (
                   <div>
-                    <div className="section-title">{social ? `${providerLabel(cap.provider)} 앱 자격 증명` : 'Google OAuth 온보딩'}</div>
+                    <div className="section-title">{social ? `${providerLabel(cap.provider)} 브라우저 연결` : 'Google 계정으로 연결'}</div>
                     <p className="small muted" style={{ margin: '2px 0 10px' }}>
-                      {social
-                        ? '앱 클라이언트 ID(및 시크릿)만 입력합니다. 액세스·갱신 토큰은 브라우저 로그인 후 서버가 안전하게 저장하므로 입력하지 않습니다.'
-                        : '클라이언트 ID(및 선택적 시크릿)와 공급자 필수 정보만 입력합니다. 갱신 토큰·서비스 계정 키는 브라우저 로그인 후 서버가 안전하게 저장하므로 입력하지 않습니다.'}
+                      브라우저에서 로그인하고 권한에 동의하면 갱신 토큰을 보관함에 저장합니다. 서비스 계정 키는 OAuth에서 발급되지 않습니다.
                     </p>
-                    <Field label="클라이언트 ID" required htmlFor="oauth-clientid" hint={social ? '앱(개발자 포털) 클라이언트 ID' : 'Google Cloud OAuth 클라이언트 ID'}>
+                    {useSavedApp && <Notice tone="info">{savedApp?.source}의 앱 설정을 재사용합니다. 클라이언트 ID·시크릿을 다시 입력할 필요가 없습니다.</Notice>}
+                    {social ? <details open={!useSavedApp} onToggle={e => { if (e.currentTarget.open && savedApp) setCustomClient(true); }}>
+                      <summary className="small" style={{ cursor: 'pointer', margin: '10px 0' }}>OAuth 앱 직접 설정{!savedApp ? ' · 최초 1회' : ' · 다른 앱 사용'}</summary>
+                      {!savedApp && <Notice tone="info">이 앱에 공용 OAuth 클라이언트가 아직 설정되지 않았습니다. 앱 제공자가 등록한 클라이언트를 제공하면 로그인만으로 연결할 수 있습니다. 직접 사용하는 경우 개발자 콘솔에서 앱을 한 번 등록하세요.</Notice>}
+                      {savedApp && customClient && <button className="btn btn--sm" onClick={() => setCustomClient(false)}>저장된 앱 설정 사용</button>}
+                    <Field label="클라이언트 ID" required htmlFor="oauth-clientid" hint={social ? '앱(개발자 포털) 클라이언트 ID' : 'Google Cloud → Google Auth Platform → 클라이언트 → 데스크톱 앱'}>
                       <input
                         id="oauth-clientid"
                         className="input mono"
@@ -677,9 +723,22 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
                         spellCheck={false}
                       />
                     </Field>
-                    {onboardingFields.map((f) => (
-                      <CredentialInput key={f.key} field={f} value={credentials[f.key] ?? ''} onChange={(v) => setCredentials((c) => ({ ...c, [f.key]: v }))} />
+                    </details> : <div style={{ margin: '10px 0' }}>
+                      {!savedApp && <Notice tone="info">계정을 연결하기 전에 공통 Google OAuth 앱을 한 번 등록해 주세요.</Notice>}
+                      <button className="btn btn--sm" onClick={() => setGoogleAppOpen(true)} disabled={!state.vault.available}>
+                        <KeyRound size={14} /> {savedApp ? 'Google 앱 설정' : 'Google OAuth 앱 등록'}
+                      </button>
+                    </div>}
+                    {provider === 'google-play' && state.projects.some(p => p.targets.includes('android') && p.appIdentifier) && <div className="tool-picker" role="group" aria-label="기본 Android 앱 선택">
+                      {state.projects.filter(p => p.targets.includes('android') && p.appIdentifier).map(p => <button type="button" className="btn btn--sm" key={p.id} aria-pressed={credentials.packageName === p.appIdentifier}
+                        onClick={() => setCredentials(c => ({ ...c, packageName: p.appIdentifier! }))}>{p.name}</button>)}
+                    </div>}
+                    {onboardingFields.filter(f => f.required).map(f => (
+                      <CredentialInput key={f.key} field={f} value={credentials[f.key] ?? ''} onChange={v => setCredentials(c => ({ ...c, [f.key]: v }))} />
                     ))}
+                    {onboardingFields.some(f => !f.required) && <details><summary className="small" style={{ cursor: 'pointer', margin: '10px 0' }}>공급자 추가 설정 · 선택</summary>
+                      {onboardingFields.filter(f => !f.required).map(f => <CredentialInput key={f.key} field={f} value={credentials[f.key] ?? ''} onChange={v => setCredentials(c => ({ ...c, [f.key]: v }))} />)}
+                    </details>}
                     <Notice tone="info">
                       <span className="small">
                         <ExternalLink size={12} /> 연결을 시작하면 시스템 브라우저에서 {social ? `${providerLabel(cap.provider)} 로그인` : 'Google 로그인(accounts.google.com)'}이
@@ -708,7 +767,7 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
                 )}
 
                 {cap.limitations.length > 0 && (
-                  <Notice tone="info" title="연동 제한 사항">
+                  <details><summary className="small" style={{ cursor: 'pointer' }}>연동 범위·제한 사항</summary><Notice tone="info">
                     <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
                       {cap.limitations.map((l, i) => (
                         <li key={i} className="small">
@@ -716,7 +775,7 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
                         </li>
                       ))}
                     </ul>
-                  </Notice>
+                  </Notice></details>
                 )}
 
                 {cap.setupUrl && (
@@ -727,7 +786,7 @@ function AddConnectionModal({ state, refresh, onClose }: { state: AppState; refr
               </>
             )}
 
-            {openError && <Notice tone="error" title="브라우저 열기 실패">{openError}</Notice>}
+            {openError && <Notice tone="error" title="연결 준비 실패">{openError}</Notice>}
             {oauth.error && <Notice tone="error" title="OAuth 시작 실패">{oauth.error.message}</Notice>}
             {add.error && <Notice tone="error" title="연결 실패">{add.error.message}</Notice>}
           </>

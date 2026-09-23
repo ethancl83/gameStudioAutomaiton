@@ -85,7 +85,7 @@ export class GoogleOAuthBroker {
     return { state, authorizationUrl: url.toString() };
   }
 
-  async complete(input: { state: string; code: string }): Promise<Credentials> {
+  async complete(input: { state: string; code: string }, onAccessToken?: (token: string) => Promise<void>): Promise<Credentials> {
     if (typeof input.state !== 'string' || input.state === '' || typeof input.code !== 'string' || input.code === '') {
       throw new CredentialError('invalid_oauth_input', 'state and code are both required to complete an authorization');
     }
@@ -117,6 +117,10 @@ export class GoogleOAuthBroker {
     const credentials: Credentials = { clientId: pending.clientId, refreshToken: payload.refresh_token };
     if (pending.clientSecret !== undefined) credentials.clientSecret = pending.clientSecret;
     if (typeof payload.scope === 'string' && payload.scope !== '') credentials.grantedScopes = payload.scope;
+    if (onAccessToken) {
+      if (typeof payload.access_token !== 'string' || !payload.access_token) throw new CredentialError('oauth_exchange_incomplete', 'OAuth access token is missing');
+      await onAccessToken(payload.access_token);
+    }
     return credentials;
   }
 
