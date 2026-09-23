@@ -42,8 +42,8 @@ function fixturePackage(kind: DownloadPackage['kind'], files: Record<string, str
   return {
     body: zipped.bytes,
     pkg: {
-      name, url: `https://github.com/godotengine/godot-builds/releases/download/4.3-stable/${name}`,
-      sha256: zipped.sha256, version: extra.version ?? '4.3', kind, archive: 'zip', maxBytes: 8 * 1024 * 1024,
+      name, url: `https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/${name}`,
+      sha256: zipped.sha256, version: extra.version ?? '4.7.2', kind, archive: 'zip', maxBytes: 8 * 1024 * 1024,
       allowedHosts: extra.allowedHosts ?? GITHUB_RELEASE_HOSTS, entry: extra.entry, ...extra,
     },
   };
@@ -94,8 +94,8 @@ function createInstaller(t: { after: (fn: () => void | Promise<void>) => void },
 
 test('start is synchronous, serializes jobs, and installs Godot and templates into versioned folders', async t => {
   const directory = await tempDir(t, 'appops-inst-');
-  const editor = fixturePackage('godot', {'Godot_v4.3-stable_linux.x86_64': '#!/bin/true\n'}, {entry: 'Godot_v4.3-stable_linux.x86_64', name: 'Godot_v4.3-stable_linux.x86_64.zip'});
-  const templates = fixturePackage('godot-templates', {'templates/version.txt': '4.3.stable\n', 'templates/linux_release.x86_64': 'template'}, {name: 'Godot_v4.3-stable_export_templates.tpz'});
+  const editor = fixturePackage('godot', {'Godot_v4.7.2-stable_linux.x86_64': '#!/bin/true\n'}, {entry: 'Godot_v4.7.2-stable_linux.x86_64', name: 'Godot_v4.7.2-stable_linux.x86_64.zip'});
+  const templates = fixturePackage('godot-templates', {'templates/version.txt': '4.7.2.stable\n', 'templates/linux_release.x86_64': 'template'}, {name: 'Godot_v4.7.2-stable_export_templates.tpz'});
   const {installer, settings} = createInstaller(t, directory, {
     fetch: staticFetch({[editor.pkg.url]: editor.body, [templates.pkg.url]: templates.body}),
     resolvePackage: (id: ToolId) => id === 'godot' ? editor.pkg : id === 'godot-templates' ? templates.pkg : packageFor(id, 'linux', 'x64'),
@@ -109,17 +109,17 @@ test('start is synchronous, serializes jobs, and installs Godot and templates in
   assert.equal(listed[1]?.status, 'queued');
   const done = await waitJob(installer, first.id);
   assert.equal(done.status, 'succeeded');
-  assert.equal(settings().godot?.endsWith('Godot_v4.3-stable_linux.x86_64'), true);
+  assert.equal(settings().godot?.endsWith('Godot_v4.7.2-stable_linux.x86_64'), true);
   assert.equal(await readFile(settings().godot!, 'utf8'), '#!/bin/true\n');
   const templatesDone = await waitJob(installer, second.id);
   assert.equal(templatesDone.status, 'succeeded');
   assert.ok(settings().godotData);
-  assert.equal(await readFile(join(settings().godotData!, 'export_templates', GODOT_TEMPLATE_RELEASE, 'version.txt'), 'utf8'), '4.3.stable\n');
+  assert.equal(await readFile(join(settings().godotData!, 'export_templates', GODOT_TEMPLATE_RELEASE, 'version.txt'), 'utf8'), '4.7.2.stable\n');
 });
 
 test('digest mismatch fails the job and does not change settings', async t => {
   const directory = await tempDir(t, 'appops-digest-');
-  const editor = fixturePackage('godot', {'Godot_v4.3-stable_linux.x86_64': 'editor'}, {entry: 'Godot_v4.3-stable_linux.x86_64'});
+  const editor = fixturePackage('godot', {'Godot_v4.7.2-stable_linux.x86_64': 'editor'}, {entry: 'Godot_v4.7.2-stable_linux.x86_64'});
   const wrong: DownloadPackage = {...editor.pkg, sha256: sha256(Buffer.from('not-the-bytes'))};
   const {installer, settings} = createInstaller(t, directory, {
     fetch: staticFetch({[wrong.url]: editor.body}),
@@ -151,7 +151,7 @@ test('interrupted jobs fail on restart and leftover stages are removed', async t
 
 test('settings save failure keeps the previous active version', async t => {
   const directory = await tempDir(t, 'appops-settings-');
-  const editor = fixturePackage('godot', {'Godot_v4.3-stable_linux.x86_64': 'new-editor'}, {entry: 'Godot_v4.3-stable_linux.x86_64'});
+  const editor = fixturePackage('godot', {'Godot_v4.7.2-stable_linux.x86_64': 'new-editor'}, {entry: 'Godot_v4.7.2-stable_linux.x86_64'});
   const previous = join(directory, 'old-godot');
   await writeFile(previous, 'old-editor');
   const created = createInstaller(t, directory, {
@@ -169,7 +169,7 @@ test('settings save failure keeps the previous active version', async t => {
 
 test('cancel stops an in-flight download', async t => {
   const directory = await tempDir(t, 'appops-cancel-');
-  const editor = fixturePackage('godot', {'Godot_v4.3-stable_linux.x86_64': 'x'}, {entry: 'Godot_v4.3-stable_linux.x86_64'});
+  const editor = fixturePackage('godot', {'Godot_v4.7.2-stable_linux.x86_64': 'x'}, {entry: 'Godot_v4.7.2-stable_linux.x86_64'});
   const fetchSlow: typeof fetch = async (input, init) => new Response(new ReadableStream({
     start(controller) {
       const abort = (): void => controller.error(Object.assign(new Error('aborted'), {name: 'AbortError'}));
@@ -558,7 +558,7 @@ test('catalog pins expected versions and official Android package revisions', ()
   assert.equal(jdk.expectedVersion, TEMURIN_JAVA_VERSION);
   assert.ok(jdk.expectedLayout?.includes('bin/java'));
   const godot = packageFor('godot', 'linux', 'x64');
-  assert.equal(godot.expectedVersion, '4.3');
+  assert.equal(godot.expectedVersion, '4.7.2');
   assert.equal(PLAY_TARGET_API.newAppsAndUpdates, 36);
   assert.equal(PLAY_TARGET_API.existingAppsDiscoverable, 35);
   assert.equal(PLAY_TARGET_API.tvAndXr, 34);

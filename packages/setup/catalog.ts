@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import type { ToolCatalogItem, ToolId } from './types.js';
 import { AppError } from '../domain/errors.js';
 
-export const GODOT_VERSION = '4.3';
-export const GODOT_TEMPLATE_RELEASE = '4.3.stable';
+export const GODOT_VERSION = '4.7.2';
+export const GODOT_TEMPLATE_RELEASE = `${GODOT_VERSION}.stable`;
 export const TEMURIN_VERSION = '21.0.12.1+1';
 /** `java -version` / `release` JAVA_VERSION string for Temurin 21.0.12.1+1. */
 export const TEMURIN_JAVA_VERSION = '21.0.12.1';
@@ -40,13 +40,13 @@ export const GOOGLE_DL_HOSTS = ['dl.google.com', 'dl-ssl.google.com'] as const;
 const godotBase = `https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/`;
 const temurinBase = `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-${TEMURIN_VERSION}/`;
 
-/** Official SHA-512 from Godot 4.3-stable SHA512-SUMS.txt (fetched 2026-09-11). */
+/** Official SHA-512 from Godot 4.7.2-stable SHA512-SUMS.txt (fetched 2026-09-23). */
 const GODOT_SHA512: Record<string, string> = {
-  'Godot_v4.3-stable_linux.x86_64.zip': 'fd52bb4ba8acc30ca5accd1c566d470ad7282f891ccc0995dfafabcf92bcf76280ce182bf9d80ebd885f3ed2165d01e1fc3f2928436b15498dfbd98656c2a45a',
-  'Godot_v4.3-stable_linux.arm64.zip': 'bf559c7d24f2a7c8980d021c9e8c54baa66c5f3a1a0c1fb6fe73586eca63417fd365adf2e6c8be0b5944ab80da800fe4aa3a9024f58363f5dc3962e6127c0dc6',
-  'Godot_v4.3-stable_macos.universal.zip': '8a556637aa6b83a60473decdb43a448b214f31fd13318b6f7ba2ebc4cca4e40d1f7a933330ce40afa8d72273ef6a6f3a0e3b0f0abf8e1be3fe4f03119cae62c2',
-  'Godot_v4.3-stable_win64.exe.zip': 'ad09b7e19949327700dfbe64e35880a2a08091c0751277f5cc21b915e5df9b4fe93fb43c50d6bdfb9d16b46168592491aa698e0d2dbe9f92132e163dd77b97e1',
-  'Godot_v4.3-stable_export_templates.tpz': '476366caf0fd45a8f24136cf9cf1dc0bc2b96f7c82d53e5f82200b55aefd07b286d283fd6f1ce29e0de70648c5a51d3b12f96c6d4fafd4e8c4878ecda6406d6a',
+  'Godot_v4.7.2-stable_linux.x86_64.zip': '9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65',
+  'Godot_v4.7.2-stable_linux.arm64.zip': 'dd59918da086bd49bde2f5450b5e567ff8650cbde9abbd7b8f4ca1197ff8c609baa38834666d032deafb47099078d7822279e2a0e06e5665745468f26533e7e2',
+  'Godot_v4.7.2-stable_macos.universal.zip': '38aa16e5bba2083941fc5b3e54be0089bd4cc35e32415f5b9fd9a8a6a7b9818255d44532ea8ef94b5aef56c4b407c2d634fa4f657e4ebe681ebbf59b7bac69ca',
+  'Godot_v4.7.2-stable_win64.exe.zip': '83decd58fdf67b9d657958a1ae6bf1929c20785315a81effe245874cdc57acb709bf868e00778a96984338c1b29dafdb453c6847747694621c6ecf5da2259993',
+  'Godot_v4.7.2-stable_export_templates.tpz': 'ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079',
 };
 
 /** Eclipse Temurin 21.0.12.1+1 SHA-256 from Adoptium API / GitHub checksum files (2026-09-11). */
@@ -154,7 +154,7 @@ export const ANDROID_LICENSE_HASHES: Record<string, readonly string[]> = {
 };
 
 export const TOOL_CATALOG: ToolCatalogItem[] = [
-  {id:'godot', name:'Godot', description:'공식 편집기를 검증해 전용 폴더에 설치합니다.', version:GODOT_VERSION, documentation:'https://godotengine.org/download/archive/4.3-stable/', installable:true, settingsKey:'godot'},
+  {id:'godot', name:'Godot', description:'공식 편집기를 검증해 전용 폴더에 설치합니다.', version:GODOT_VERSION, documentation:`https://godotengine.org/download/archive/${GODOT_VERSION}-stable/`, installable:true, settingsKey:'godot'},
   {id:'godot-templates', name:'Godot 내보내기 템플릿', description:'편집기와 동일한 버전의 Android·iOS·데스크톱 템플릿입니다.', version:GODOT_VERSION, documentation:'https://docs.godotengine.org/en/stable/tutorials/export/exporting_projects.html', installable:true, settingsKey:'godotData'},
   {id:'android-sdk', name:'Android SDK', description:'명령 도구와 Play 제출용 API 36 플랫폼·빌드 도구를 설치합니다. API 34/35와 NDK·CMake는 명시적으로 요청합니다. JDK가 필요합니다.', version:ANDROID_CMDLINE_VERSION, documentation:'https://developer.android.com/tools/sdkmanager', licenseUrl:'https://developer.android.com/studio#command-tools', installable:true, settingsKey:'androidSdk'},
   {id:'jdk', name:'JDK', description:'Eclipse Temurin 21을 검증해 전용 폴더에 설치합니다. 많은 Gradle 프로젝트는 JDK 25를 아직 지원하지 않습니다.', version:TEMURIN_VERSION, documentation:'https://adoptium.net/temurin/releases/?version=21', licenseUrl:'https://adoptium.net/docs/faq/', installable:true, settingsKey:'javaHome'},
@@ -166,10 +166,10 @@ export const TOOL_CATALOG: ToolCatalogItem[] = [
 ];
 
 function godotEditor(platform: NodeJS.Platform, arch: string): {file:string; entry:string} {
-  if (platform === 'linux' && arch === 'x64') return {file:'Godot_v4.3-stable_linux.x86_64.zip', entry:'Godot_v4.3-stable_linux.x86_64'};
-  if (platform === 'linux' && arch === 'arm64') return {file:'Godot_v4.3-stable_linux.arm64.zip', entry:'Godot_v4.3-stable_linux.arm64'};
-  if (platform === 'win32' && arch === 'x64') return {file:'Godot_v4.3-stable_win64.exe.zip', entry:'Godot_v4.3-stable_win64.exe'};
-  if (platform === 'darwin') return {file:'Godot_v4.3-stable_macos.universal.zip', entry:'Godot.app/Contents/MacOS/Godot'};
+  if (platform === 'linux' && arch === 'x64') return {file:`Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip`, entry:`Godot_v${GODOT_VERSION}-stable_linux.x86_64`};
+  if (platform === 'linux' && arch === 'arm64') return {file:`Godot_v${GODOT_VERSION}-stable_linux.arm64.zip`, entry:`Godot_v${GODOT_VERSION}-stable_linux.arm64`};
+  if (platform === 'win32' && arch === 'x64') return {file:`Godot_v${GODOT_VERSION}-stable_win64.exe.zip`, entry:`Godot_v${GODOT_VERSION}-stable_win64.exe`};
+  if (platform === 'darwin') return {file:`Godot_v${GODOT_VERSION}-stable_macos.universal.zip`, entry:'Godot.app/Contents/MacOS/Godot'};
   throw new AppError('INSTALL_PLATFORM', '이 장비용 자동 설치 파일이 없습니다. 기존 도구 경로를 연결해 주세요.');
 }
 
@@ -218,7 +218,7 @@ export function packageFor(id: ToolId, platform: NodeJS.Platform = process.platf
     return {
       name: artifact.name, url: temurinBase + artifact.name, sha256: artifact.sha256, version: TEMURIN_VERSION,
       kind: id, archive: artifact.archive, maxBytes: artifact.maxBytes, allowedHosts: GITHUB_RELEASE_HOSTS,
-      expectedVersion: TEMURIN_JAVA_VERSION, expectedLayout: ['bin/java', 'bin/javac'],
+      expectedVersion: TEMURIN_JAVA_VERSION, expectedLayout: platform === 'win32' ? ['bin/java.exe', 'bin/javac.exe'] : ['bin/java', 'bin/javac'],
     };
   }
   throw new AppError('MANUAL_INSTALL', '해당 도구는 공식 설치 프로그램·라이선스 확인 후 기존 경로를 연결합니다.');

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { crc32, deflateRawSync } from 'node:zlib';
 import { mkdtemp, readFile, rm, writeFile, lstat, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,25 +60,26 @@ function tarArchive(entries: {name: string; content?: Buffer; type?: string; lin
   return Buffer.concat(parts);
 }
 
-const official = 'https://github.com/godotengine/godot-builds/releases/download/4.3-stable/Godot_v4.3-stable_linux.x86_64.zip';
+const official = 'https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip';
 
-test('catalog pins official Godot 4.3 and Temurin 21 digests', () => {
+test('catalog pins official Godot 4.7.2 and Temurin 21 digests', () => {
   const godot = packageFor('godot', 'linux', 'x64');
   assert.equal(godot.url, official);
-  assert.equal(godot.sha512, 'fd52bb4ba8acc30ca5accd1c566d470ad7282f891ccc0995dfafabcf92bcf76280ce182bf9d80ebd885f3ed2165d01e1fc3f2928436b15498dfbd98656c2a45a');
+  assert.equal(godot.sha512, '9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65');
   const templates = packageFor('godot-templates', 'linux', 'x64');
-  assert.equal(templates.sha512, '476366caf0fd45a8f24136cf9cf1dc0bc2b96f7c82d53e5f82200b55aefd07b286d283fd6f1ce29e0de70648c5a51d3b12f96c6d4fafd4e8c4878ecda6406d6a');
+  assert.equal(templates.sha512, 'ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079');
   const android = packageFor('android-sdk', 'linux', 'x64');
   assert.equal(android.sha256, '4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583');
   const armGodot = packageFor('godot', 'linux', 'arm64');
-  assert.equal(armGodot.name, 'Godot_v4.3-stable_linux.arm64.zip');
-  assert.equal(armGodot.entry, 'Godot_v4.3-stable_linux.arm64');
-  assert.equal(armGodot.sha512, 'bf559c7d24f2a7c8980d021c9e8c54baa66c5f3a1a0c1fb6fe73586eca63417fd365adf2e6c8be0b5944ab80da800fe4aa3a9024f58363f5dc3962e6127c0dc6');
+  assert.equal(armGodot.name, 'Godot_v4.7.2-stable_linux.arm64.zip');
+  assert.equal(armGodot.entry, 'Godot_v4.7.2-stable_linux.arm64');
+  assert.equal(armGodot.sha512, 'dd59918da086bd49bde2f5450b5e567ff8650cbde9abbd7b8f4ca1197ff8c609baa38834666d032deafb47099078d7822279e2a0e06e5665745468f26533e7e2');
   assert.notEqual(armGodot.sha512, godot.sha512);
   const jdk = packageFor('jdk', 'linux', 'x64');
   assert.equal(jdk.sha256, 'ce79869e1307ed8ee1e2baa86a412b1eb5b75d10a01006d788a6f968bcfaee94');
   assert.equal(jdk.archive, 'tar.gz');
   assert.equal(packageFor('jdk', 'win32', 'x64').archive, 'zip');
+  assert.deepEqual(packageFor('jdk', 'win32', 'x64').expectedLayout, ['bin/java.exe', 'bin/javac.exe']);
   assert.throws(() => packageFor('unity'), (error: unknown) => expectCode(error, 'MANUAL_INSTALL'));
   assert.throws(() => packageFor('gradle-cache'), (error: unknown) => expectCode(error, 'MANUAL_INSTALL'));
 });
@@ -498,5 +500,67 @@ test('downloadVerified pulls the pinned Android command-line tools zip through N
       return t.skip(`official CDN unavailable: ${message}`);
     }
     throw error;
+  }
+});
+
+function descriptorZip(payload: Buffer, method = 8, trailing = Buffer.alloc(0)): Buffer {
+  const name = Buffer.from('lib/nested.jar');
+  const compressed = Buffer.concat([method === 8 ? deflateRawSync(payload, { level: 0 }) : payload, trailing]);
+  const checksum = crc32(payload);
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50); local.writeUInt16LE(20, 4); local.writeUInt16LE(8, 6);
+  local.writeUInt16LE(method, 8); local.writeUInt16LE(name.length, 26);
+  const descriptor = Buffer.alloc(16);
+  descriptor.writeUInt32LE(0x08074b50); descriptor.writeUInt32LE(checksum, 4);
+  descriptor.writeUInt32LE(compressed.length, 8); descriptor.writeUInt32LE(payload.length, 12);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50); central.writeUInt16LE(20, 6); central.writeUInt16LE(8, 8);
+  central.writeUInt16LE(method, 10); central.writeUInt32LE(checksum, 16);
+  central.writeUInt32LE(compressed.length, 20); central.writeUInt32LE(payload.length, 24); central.writeUInt16LE(name.length, 28);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length + name.length, 12);
+  end.writeUInt32LE(local.length + name.length + compressed.length + descriptor.length, 16);
+  return Buffer.concat([local, name, compressed, descriptor, central, name, end]);
+}
+
+test('ZIP extraction uses central ranges for nested JARs with data descriptors, stored and empty entries', async t => {
+  const root = await tempDir(t, 'appops-zip-descriptor-');
+  const payload = Buffer.from(zipSync({ 'inside.txt': Buffer.from('nested archive') }, { level: 0 }));
+  for (const [index, [content, method]] of ([[payload, 8], [payload, 0], [Buffer.alloc(0), 0]] as const).entries()) {
+    const archive = join(root, `${index}.zip`), output = join(root, `${index}`);
+    await writeFile(archive, descriptorZip(content, method));
+    await extractZip(archive, output);
+    assert.deepEqual(await readFile(join(output, 'lib/nested.jar')), content);
+  }
+});
+
+test('ZIP extraction rejects unused compressed bytes, local filename mismatch and corrupt CRC', async t => {
+  const root = await tempDir(t, 'appops-zip-corrupt-');
+  const payload = Buffer.from('verified payload');
+  const cases = [descriptorZip(payload, 8, Buffer.from('junk')), descriptorZip(payload), descriptorZip(payload)];
+  cases[1]![30] = 'X'.charCodeAt(0);
+  const central = cases[2]!.readUInt32LE(cases[2]!.length - 6);
+  cases[2]!.writeUInt32LE(0, central + 16);
+  for (const [index, archive] of cases.entries()) {
+    const path = join(root, `${index}.zip`); await writeFile(path, archive);
+    await assert.rejects(extractZip(path, join(root, String(index))), { code: 'INVALID_ARCHIVE' });
+  }
+  const path = join(root, 'cancel.zip'); await writeFile(path, descriptorZip(payload));
+  const abort = new AbortController(); abort.abort();
+  await assert.rejects(extractZip(path, join(root, 'cancelled'), abort.signal), { name: 'AbortError' });
+  await assert.rejects(lstat(join(root, 'cancelled')), { code: 'ENOENT' });
+});
+
+test('ZIP extraction rejects out-of-bounds ranges, truncated streams and expanded-size mismatches', async t => {
+  const root = await tempDir(t, 'appops-zip-ranges-');
+  const cases = [descriptorZip(Buffer.from('payload')), descriptorZip(Buffer.from('payload')), descriptorZip(Buffer.from('payload'))];
+  for (const [index, archive] of cases.entries()) {
+    const central = archive.readUInt32LE(archive.length - 6);
+    if (index === 0) archive.writeUInt32LE(central, central + 42);
+    if (index === 1) archive.writeUInt32LE(archive.readUInt32LE(central + 20) - 1, central + 20);
+    if (index === 2) archive.writeUInt32LE(1, central + 24);
+    const path = join(root, `${index}.zip`); await writeFile(path, archive);
+    await assert.rejects(extractZip(path, join(root, String(index))));
   }
 });

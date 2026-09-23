@@ -177,7 +177,8 @@ async function tool(
   if (!executable) {
     return { name, executable: null, version: null, available: false, reason: missingReason };
   }
-  const raw = await readCommandOutput(executable, versionArgs);
+  // macOS may validate a newly installed application before its first launch.
+  const raw = await readCommandOutput(executable, versionArgs, name === 'godot' ? 30_000 : 4_000);
   return {
     name,
     executable,
@@ -371,10 +372,14 @@ export async function managedToolPath(path:string, root?:string):Promise<boolean
 }
 export async function autoJavaHome():Promise<string|null>{
  const candidates:string[]=[];
+ if(process.platform==='darwin'){
+  const detected=await readCommandOutput('/usr/libexec/java_home',[]);
+  if(detected?.startsWith('/'))candidates.push(detected.trim());
+ }
  if(process.platform==='linux'){
   try{for(const name of (await readdir('/usr/lib/jvm')).sort((a,b)=>(b.includes('21')?1:0)-(a.includes('21')?1:0)))candidates.push(join('/usr/lib/jvm',name));}catch{}
  }
- const java=await pathLookup([process.platform==='win32'?'java.exe':'java']);if(java){try{candidates.push(dirname(dirname(await realpath(java))));}catch{}}
+ const java=await pathLookup([process.platform==='win32'?'java.exe':'java']);if(java && !(process.platform==='darwin' && java==='/usr/bin/java')){try{candidates.push(dirname(dirname(await realpath(java))));}catch{}}
  for(const root of candidates)if(await isExecutable(join(root,'bin',process.platform==='win32'?'javac.exe':'javac')))return root;
  return null;
 }

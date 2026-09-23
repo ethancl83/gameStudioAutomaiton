@@ -1,5 +1,5 @@
 // 핵심 SDK 4개를 호스트별 공식 아카이브로 tmp/cross-platform-sdk-20260922 에 준비한다.
-// Unity IAP 5.4.2, MAX Unity 8.6.5, Play Billing 9.1.0 classes.jar, Godot 4.3.
+// Unity IAP 5.4.2, MAX Unity 8.6.5, Play Billing 9.1.0 classes.jar, Godot 4.7.2.
 // 전역 설치, 라이선스 자동 동의, 계정 인증은 하지 않는다. JDK와 Android cmdline은 받지 않는다.
 // 실행: node --import tsx scripts/prepare-verification-tools.ts
 import { createHash } from 'node:crypto';
@@ -76,7 +76,7 @@ function assertPinnedVersions(): void {
   if (CATALOG.unityIap.version !== UNITY_IAP_VERSION) throw new Error('Unity IAP 카탈로그 버전이 준비 핀과 다릅니다.');
   if (CATALOG.unityMax.version !== MAX_UNITY_VERSION) throw new Error('Unity MAX 카탈로그 버전이 준비 핀과 다릅니다.');
   if (CATALOG.playBilling.version !== BILLING_VERSION) throw new Error('Play Billing 카탈로그 버전이 준비 핀과 다릅니다.');
-  if (GODOT_VERSION !== '4.3') throw new Error('Godot 카탈로그 버전이 4.3이 아닙니다.');
+  if (GODOT_VERSION !== '4.7.2') throw new Error('Godot 카탈로그 버전이 4.7.2이 아닙니다.');
 }
 
 async function digestFile(path: string, algorithm: 'sha1' | 'sha256' | 'sha512'): Promise<string | undefined> {

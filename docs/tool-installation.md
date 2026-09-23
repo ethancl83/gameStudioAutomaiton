@@ -1,6 +1,6 @@
 # 검증된 도구 설치
 
-Last Updated: 2026-09-11
+Last Updated: 2026-09-23
 
 앱은 사용자 홈이나 임의의 URL에서 도구를 받지 않습니다. 설치 관리자는 릴리스에 고정된 카탈로그만 사용하고, 받은 파일의 다이제스트가 일치할 때만 전용 폴더에 활성화합니다. 제어 서비스는 `dataDirectory + '.tools'`를 관리 루트로 넘기고, 빌드를 큐에 넣을 때 `ToolSettings` 경로를 스냅샷합니다. 전역 `process.env`는 바꾸지 않습니다.
 
@@ -18,10 +18,10 @@ Last Updated: 2026-09-11
 
 | 도구 | 설정 키 | 경로 |
 |---|---|---|
-| Godot 4.3 편집기 | `godot` | OS별 실행 파일. Linux `Godot_v4.3-stable_linux.x86_64`, Windows `Godot_v4.3-stable_win64.exe`, macOS `Godot.app/Contents/MacOS/Godot` |
-| Godot 템플릿 | `godotData` | `export_templates/4.3.stable/` 를 담은 데이터 루트. 엔진 검사는 이 형태를 요구합니다. |
+| Godot 4.7.2 편집기 | `godot` | OS별 실행 파일. Linux `Godot_v4.7.2-stable_linux.x86_64`, Windows `Godot_v4.7.2-stable_win64.exe`, macOS `Godot.app/Contents/MacOS/Godot` |
+| Godot 템플릿 | `godotData` | `export_templates/4.7.2.stable/` 를 담은 데이터 루트. 엔진 검사는 이 형태를 요구합니다. |
 | Eclipse Temurin 21.0.12.1+1 | `javaHome` | `bin/java`(또는 `java.exe`)가 있는 JDK 루트. Gradle·Android에 JDK 25는 너무 새 버전인 경우가 많습니다. |
-| Android command-line tools 15859902 | `androidSdk` | `cmdline-tools/latest` 와 선택한 패키지. 라이선스 동의(`acceptLicense`)와 JDK가 필요합니다. 기본 패키지: `platform-tools`, `platforms;android-34`, `build-tools;34.0.0` |
+| Android command-line tools 15859902 | `androidSdk` | `cmdline-tools/latest` 와 선택한 패키지. 라이선스 동의(`acceptLicense`)와 JDK가 필요합니다. 기본 패키지: `platform-tools`, `platforms;android-36`, `build-tools;36.0.0` |
 
 Unity, Unreal, Xcode, SteamCMD는 라이선스·계정 설치가 필요합니다. 자동 설치 성공으로 표시하지 않으며 사용자가 공식 설치 후 경로를 연결합니다.
 
@@ -33,9 +33,9 @@ Unity, Unreal, Xcode, SteamCMD는 라이선스·계정 설치가 필요합니다
 - 리디렉션은 hop마다 다시 검사합니다. 로컬·IP·`file:`·HTTP·허용 목록 밖 호스트는 거절합니다.
 - `.partial`에 스트리밍하고 바이트 한도를 적용합니다. SHA-256 또는 SHA-512가 카탈로그 핀과 다를 때 파일을 버리고 중단합니다.
 - ZIP은 루트의 `extractZip`으로만 풉니다. tar.gz는 스트리밍 추출기로 풀며 심볼릭 링크·하드 링크·장치·경로 탈출을 거절합니다.
-- 받은 파일을 실행하지 않습니다. Android `sdkmanager`만 검증된 command-line tools와 전용 `HOME`/`JAVA_HOME`/`ANDROID_*`/`TMP` 환경에서 Java 클래스패스로 호출합니다. 호스트 환경 변수·비밀은 상속하지 않습니다.
+- 무결성을 검증한 Godot·JDK는 버전 명령을 실행해 확인합니다. Android `sdkmanager`는 검증된 command-line tools와 전용 `HOME`/`JAVA_HOME`/`ANDROID_*`/`TMP` 환경에서 Java 클래스패스로 호출합니다. 호스트 환경 변수·비밀은 상속하지 않습니다.
 
-Godot 4.3 해시는 공식 `SHA512-SUMS.txt`에서 고정했습니다. Android command-line tools 15859902 SHA-256은 퍼블리셔 값입니다. Temurin 21.0.12.1+1 SHA-256은 Adoptium API/GitHub checksum 파일입니다. 설치 시 checksum 파일을 다시 받아 핀을 바꾸지 않습니다.
+Godot 4.7.2 해시는 공식 `SHA512-SUMS.txt`에서 고정했습니다. Android command-line tools 15859902 SHA-256은 퍼블리셔 값입니다. Temurin 21.0.12.1+1 SHA-256은 Adoptium API/GitHub checksum 파일입니다. 설치 시 checksum 파일을 다시 받아 핀을 바꾸지 않습니다.
 
 ## Gradle 캐시
 
@@ -50,3 +50,13 @@ Godot 4.3 해시는 공식 `SHA512-SUMS.txt`에서 고정했습니다. Android c
 ## 라이선스
 
 Android SDK 패키지는 `acceptLicense: true` 없이 시작되지 않습니다. Unity/Unreal/Xcode 동의·계정 로그인은 해당 공식 도구에서 사용자가 수행합니다. README나 탐지만으로 설치 성공을 표시하지 않습니다.
+
+## 2026-09-23 설치·표시 수정
+
+공식 Android macOS ARM64 command-line tools ZIP의 중첩 JAR/data descriptor를 스트리밍 ZIP 헤더 탐색기가 오인하던 문제를 수정했다. 중앙 디렉터리의 검증된 범위만 읽고, 로컬 헤더·범위 중첩·CRC·압축 및 해제 크기·deflate 소비량을 검사한다. 경로 탈출·링크·크기 제한은 유지한다.
+
+화면은 `설치 제공`과 `감지 버전`을 구분하고, 경로를 저장하지 않아도 검사에 통과한 도구는 `자동 감지됨`으로 표시한다. 검사 실패 이유와 JDK 선행 조건을 표시하며 실행 파일 선택을 지원한다. macOS JDK 탐지는 `/usr/libexec/java_home`을 사용해 `/usr` 시스템 shim을 JDK 루트로 오인하지 않는다. Godot 설치는 `--version`까지 통과해야 성공하며 macOS 최초 실행 검사를 위해 30초를 허용한다.
+
+Godot 4.7.2 공식 편집기·템플릿 핀과 Linux 러너 설치 스크립트를 함께 갱신했다. 기존 프로젝트·도구를 자동 업그레이드하지 않는다. 다른 엔진 버전이 필요한 프로젝트는 해당 편집기 및 같은 버전 템플릿 경로를 연결한다.
+
+Windows JDK 레이아웃 검사는 `bin/java.exe`·`bin/javac.exe`를 사용한다. 해당 플랫폼의 실설치는 이번 macOS 검증에 포함하지 않았다.

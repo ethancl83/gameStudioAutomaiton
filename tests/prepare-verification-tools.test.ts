@@ -50,7 +50,7 @@ test('prepared paths stay under the verification directory and follow the host G
   assert.equal(godotBinaryFor(root, 'linux', 'arm64'), `/repo/${VERIFICATION_DIR}/godot/${arm.entry}`);
   assert.notEqual(arm.name, x64.name);
   assert.notEqual(arm.sha512, x64.sha512);
-  assert.equal(arm.sha512, 'bf559c7d24f2a7c8980d021c9e8c54baa66c5f3a1a0c1fb6fe73586eca63417fd365adf2e6c8be0b5944ab80da800fe4aa3a9024f58363f5dc3962e6127c0dc6');
+  assert.equal(arm.sha512, 'dd59918da086bd49bde2f5450b5e567ff8650cbde9abbd7b8f4ca1197ff8c609baa38834666d032deafb47099078d7822279e2a0e06e5665745468f26533e7e2');
   assert.equal(UNITY_STORE_RELATIVE, 'unity-iap/package/Runtime/Purchasing/Core/StoreController.cs');
   assert.equal(UNITY_ORDER_RELATIVE, 'unity-iap/package/Runtime/Purchasing/Core/Purchasing/Models/Interfaces/IOrderInfo.cs');
   assert.equal(MAX_SETTINGS_RELATIVE, 'max-unity/ebc0ba1b5ef6b4a6b9dd53d7eadfea16/asset');

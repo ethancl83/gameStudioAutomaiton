@@ -29,11 +29,11 @@ async function waitJob(installer: ToolInstaller, id: string, timeoutMs: number):
   throw new Error('job did not finish: ' + JSON.stringify(installer.list()));
 }
 
-test('live Godot 4.3 linux editor installs from the pinned official archive', {timeout: 180_000}, async t => {
+test('live Godot 4.7.2 linux editor installs from the pinned official archive', {timeout: 180_000}, async t => {
   if (process.platform !== 'linux' || process.arch !== 'x64') return t.skip('linux x64 host required');
   if (process.env.APPOPS_SKIP_LIVE_INSTALL === '1') return t.skip('APPOPS_SKIP_LIVE_INSTALL=1');
   const pkg = packageFor('godot', 'linux', 'x64');
-  assert.equal(pkg.expectedVersion, '4.3');
+  assert.equal(pkg.expectedVersion, '4.7.2');
   assert.ok(pkg.expectedLayout?.length);
   const directory = await mkdtemp(join('/tmp', 'appops-godot-live-'));
   let settings: ToolSettings = {};

@@ -41,7 +41,7 @@ function probeGodot(path: string): { ok: true; version: string } | { ok: false; 
   const probed = spawnSync(path, ['--version'], { encoding: 'utf8' });
   if (probed.error) return { ok: false, launched: false, detail: probed.error.message };
   const version = `${probed.stdout ?? ''}${probed.stderr ?? ''}`.trim();
-  if (probed.status !== 0 || !probed.stdout?.includes('4.3')) return { ok: false, launched: true, detail: version || `exit ${probed.status}` };
+  if (probed.status !== 0 || !probed.stdout?.includes('4.7.2')) return { ok: false, launched: true, detail: version || `exit ${probed.status}` };
   return { ok: true, version: probed.stdout.trim() };
 }
 
@@ -202,7 +202,7 @@ test('generated Godot billing bridge calls the Billing 3.3 public script contrac
   assert.match(generated, /query_purchases\(BillingClient\.ProductType\.INAPP\)/);
 });
 
-test('Godot 4.3 parses the generated Billing 3.3.0 bridge against its public script contract', { timeout: 180_000 }, async (t) => {
+test('Godot 4.7.2 parses the generated Billing 3.3.0 bridge against its public script contract', { timeout: 180_000 }, async (t) => {
   const configured = explicitEnv('APPOPS_GODOT');
   let candidate = configured;
   if (!candidate) {
@@ -217,8 +217,8 @@ test('Godot 4.3 parses the generated Billing 3.3.0 bridge against its public scr
   }
   const probed = probeGodot(candidate);
   if (!probed.ok) {
-    if (configured !== undefined || probed.launched) assert.fail(`Godot 4.3으로 실행하지 못했습니다 (${candidate}: ${probed.detail}).`);
-    t.skip(`Godot 4.3 검증 바이너리가 없습니다: ${candidate} (${probed.detail}). node --import tsx scripts/prepare-verification-tools.ts 로 이 호스트용 4.3을 준비하거나 APPOPS_GODOT로 지정할 수 있습니다.`);
+    if (configured !== undefined || probed.launched) assert.fail(`Godot 4.7.2으로 실행하지 못했습니다 (${candidate}: ${probed.detail}).`);
+    t.skip(`Godot 4.7.2 검증 바이너리가 없습니다: ${candidate} (${probed.detail}). node --import tsx scripts/prepare-verification-tools.ts 로 이 호스트용 4.7.2을 준비하거나 APPOPS_GODOT로 지정할 수 있습니다.`);
     return;
   }
   const dir = await mkdtemp(join(tmpdir(), 'appops-godot-billing-'));

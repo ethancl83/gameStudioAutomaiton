@@ -26,7 +26,7 @@ const HEX40 = /^[0-9a-f]{40}$/i;
 const LICENSE_ID = /^[a-z0-9._-]+$/i;
 export const INSTALLER_CLOSE_TIMEOUT_MS = 5_000;
 const KILL_GRACE_MS = 200;
-const VERSION_PROBE_MS = 15_000;
+const VERSION_PROBE_MS = 30_000;
 const RECEIPT_NAME = '.appops-receipt.json';
 
 export interface ToolInstallStartOptions { acceptLicense?: boolean; androidPackages?: string[] }
@@ -598,7 +598,11 @@ export class ToolInstaller {
         if (!(await isFile(target)) && !(await isDir(target))) return false;
       }
     }
-    if (toolId === 'godot') return await isFile(join(versionDir, pkg.entry ?? ''));
+    if (toolId === 'godot') {
+      const executable = join(versionDir, pkg.entry ?? '');
+      if (!(await isFile(executable))) return false;
+      return !pkg.expectedVersion || (await this.#probeVersion(executable, ['--version']))?.trim().startsWith(pkg.expectedVersion + '.stable') === true;
+    }
     if (toolId === 'godot-templates') {
       return await isDir(join(versionDir, 'export_templates', GODOT_TEMPLATE_RELEASE))
         && await hasEntries(join(versionDir, 'export_templates', GODOT_TEMPLATE_RELEASE));
@@ -645,7 +649,7 @@ export class ToolInstaller {
         timeoutMs: VERSION_PROBE_MS,
         children: this.#children,
       });
-      return result.output;
+      return result.code === 0 ? result.output : null;
     } catch {
       return null;
     }
