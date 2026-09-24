@@ -11,3 +11,4 @@ test-results/
 playwright-report/
 tmp/
 client_secret_*.json
+.DS_Store
