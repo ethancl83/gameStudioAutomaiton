@@ -1,8 +1,51 @@
 # 구현 검증 기록
 
-Last Updated: 2026-09-22 (macOS Docker/Linux 실행·공식 SDK 이식성; 아래 날짜별 기록은 해당 체크포인트)
+Last Updated: 2026-10-01 (아키텍처 안전성·책임 경계 개선; 아래 날짜별 기록은 해당 체크포인트)
 
 [계획 v9](../dev/active/app-operations-platform/app-operations-platform-plan-v9.md) · [작업 목록](../dev/active/app-operations-platform/app-operations-platform-tasks.md) · [맥락](../dev/active/app-operations-platform/app-operations-platform-context.md) · [실제 지원 범위](integration-capabilities.md)
+
+## 2026-10-01 아키텍처 안전성·책임 경계 개선
+
+전체 코드 분석의 개선 범위를 [불변 계획](../dev/archive/architecture-refactoring/architecture-refactoring-plan.md)에 고정하고 ai-team으로 구현했다. 기존 모듈형 모놀리스·SQLite·vault·작업 소유권과 미커밋 변경을 유지했다. 새 서비스·의존성은 추가하지 않았다. [완료 계약과 결정](../dev/archive/architecture-refactoring/architecture-refactoring-context.md) · [실행·복구 계약](workflow-contract.md).
+
+- **프로세스 종료:** 실제 ChildProcess의 생존 상태·부모·PID·시작 시각으로 루트 권한을 확인하고 관찰한 자손만 종료한다. 없는 루트·호스트 프로세스·재사용한 PID·종료 경합을 거절하며 관찰한 setsid 자손 정리는 보존한다.
+- **외부 변경과 원자성:** 성장 run·prepared effect·업무 출처·답글/가격 문서를 함께 예약한다. 결과·관측·reconcile·effect·완료를 함께 확정하고 저장 실패에는 rollback·큐 중단·오류 보고를 수행한다. 웹 CLI는 durable dispatch를 commit한 뒤 열며 미확정 결과를 자동 재전송하지 않는다.
+- **안전 조회와 호환성:** 표시 상한과 별개로 전체 run/effect 이력을 SQL로 검사한다. 삭제·계정 변경은 외부 await 뒤 재검사하며 기존 웹 배포도 차단 근거로 유지한다. typed 문서 저장과 DB 버전 0/1 호환을 연결하고 미지원 상위 버전은 변경 없이 거절한다.
+- **책임 경계:** reusable runner를 packages/runner로 이동하고 Docker context와 기존 entrypoint를 연결했다. 공급자 순환 참조 3개를 하위 client 추출로 제거했다. 8개 기능 Controller의 전체 AppService 의존을 좁은 hooks로 바꾸고 결과·정책·성장 AI CLI 책임을 분리했다. packages→apps 역참조·정적 runtime 순환 검사를 typecheck에 포함했다.
+- **조회·화면 계약:** 프로젝트 SQL 범위 조회와 결정 커서 페이지, 공유 개발 DTO를 실제 API/IPC/UI에 연결했다. DevelopmentView를 책임별 구성요소로 분리했다. 성장 화면은 완료 뒤 다음 poll을 예약하고 프로젝트 전환·늦은 응답을 처리하며 서버와 화면이 같은 열린 응답 7개 상태를 사용한다. 전역 digest와 프로젝트의 전체 귀속 cohort 계산 의미는 보존했다.
+
+### 검사와 독립 리뷰
+
+최종 세 게이트는 수정한 테스트를 포함한 같은 소스에서 각각 한 번 실행했고 모두 exit 0이었다.
+
+| 최종 게이트 | 결과 |
+|---|---|
+| `npm run typecheck` | 두 TypeScript 검사 및 아키텍처 경계·정적 runtime 순환 검사 통과(273개 소스) |
+| `npm run build` | 통과; renderer JS chunk 1,042.20 kB의 기존 크기 경고 유지 |
+| `npm test` | **729개 중 716 통과·실패 0·취소 0·환경 skip 13**, 21.56초 |
+
+소스 fingerprint는 실행 전후 및 root 회수 후 모두 `df50f8d5bf6099243aaf9f7ec185623f1e0f3b6a4062ed1b7b5149c0d9e4405a`로 같았다. tracked와 비무시 untracked의 apps/packages/scripts/tests 및 package·TypeScript·빌드 설정 381개 파일별 SHA-256을 정렬·집계했고 docs/tmp/dist는 제외했다. [타입 로그](../tmp/architecture-refactoring/typecheck-final.log) · [빌드 로그](../tmp/architecture-refactoring/build-final.log) · [전체 테스트 로그](../tmp/architecture-refactoring/test-final.log).
+
+macOS ARM64 실제 Electron 개발 화면 **20/20**, 성장 화면 **11/11**(기존 8개와 프로젝트 전환/늦은 응답·동일 시각 결정 351건의 커서 경계·A→B→A 복귀 3개)을 통과했다. 모든 성장 응답을 6초 지연한 집중 검사도 첫 로드와 다음 poll **2/2 응답**을 반영했다. runner/mac 회귀 **41/41**도 통과했다. 이 수치는 전체 테스트와 중복될 수 있어 합산하지 않는다. 네이티브 검증은 격리된 DB·fixture 공급자와 실제 Electron bridge/controller를 사용했으며 외부 쓰기는 **0건**이다.
+
+실패 비용이 큰 계약은 구현 전에 별도 Sol 세션에서 검토했다. 구현 후 backend·query·개발 UI는 구현자와 분리한 Sol 세션, connector는 별도 Opus 세션에서 최초 리뷰했다. backend/query의 필수 4건은 각각 기존 구현자가 수정했다.
+
+| 필수 지적 | 해소 및 회귀 근거 |
+|---|---|
+| 최초 snapshot 전 루트 PID 재사용으로 외부 그룹을 인정 | ChildProcess 생존·직접 부모 검증 및 snapshot/신호 직전 재검사. 신호 spy **10/10**, 실제 macOS setsid 자손 **1/1** |
+| 웹 조회 중 수동 종결을 오래된 결과로 덮어씀 | await 뒤 현재 문서 재조회, resolved 상태 보존, 읽기 실패/종결 rollback 검증. 웹 안전성 **12/12** |
+| 5초마다 시작한 poll이 매번 6초 걸리면 영구 로딩 | 완료 후 다음 poll 예약과 적용 완료 토큰 비교. 동일 신규 회귀의 수정 전 실패를 확인하고 query **8/8**, 관련 성장 **23/23** 및 네이티브 지연 응답 확인 |
+| 최근 500건 밖 blocked 응답이 열린 그룹에서 누락 | 서버·화면의 열린 상태 상수 공유 및 상한 밖 보존. 같은 query 회귀에서 blocked 포함·기존 unresolved 분류 보존 확인 |
+
+수정 전 backend 2건과 query 2건은 결정적 회귀에서 실패를 재현했다. query 수정 전 네이티브 실패는 dist가 이미 수정된 상태여서 확보하지 못했고, 해당 근거를 단위 재현과 최신 native 성공으로 구분한다. 필수 지적은 실제 diff와 집중 회귀 근거로 통합 책임자가 종료했다. 개선 제안인 SQL EXISTS/추가 결정 인덱스는 실제 성능 근거가 필요할 때 검토하며 완료 차단 결함으로 취급하지 않는다.
+
+첫 전체 검사는 **729개 중 714 통과·2 실패·13 skip**이었다. 테스트 2건을 실제 계약에 맞게 수정했다. Play 계정 동기화는 같은 주기에 예약한 앱별 조회가 pending이면 대기하고 다음 주기에 한 번 실행됨을 확인한다. 캠페인 cache 검사는 제거된 private 메서드 대신 분리한 persistResult 모듈을 transaction 안에서 호출한다. 해당 **5/5** 집중 회귀를 통과한 뒤 최종 전체 게이트를 다시 실행했다. 앱 구현은 이 수정에서 변경하지 않았다.
+
+### 범위와 한계
+
+이번 최종 실행 호스트는 macOS ARM64/Node 24.18.0이다. 환경 skip 13건은 Linux tmpfs 키 작업 4개·실제 loopback SSH 1개, opt-in Docker key helper 통합 4개, opt-in Android 실다운로드 1개, Linux x64 Godot/JDK/Android SDK 설치 3개다. 이 검증에서는 Linux/Windows 전체 suite·Docker 이미지 재빌드·실계정 API 변경·설치 패키지·장기 운영을 수행하지 않았다. Docker context의 현재 runner allowlist/파일 포함은 fixture 회귀로 확인했다. 기존 제품 계획의 실계정·다른 OS·장기 수용 항목과 완료율은 유지한다.
+
+ps 시작 시각의 해상도와 snapshot 직후 kill 사이 OS 경합은 남으며 관찰하지 못한 고아를 호스트 전체 검색으로 추측하지 않는다. 경계 검사에서는 정적 import/re-export를 확인하며 동적 import는 정적 순환 판정 밖이다. Vite의 기존 500 kB chunk 경고는 남는다. 검증·리뷰 상세 로그는 [최종 실행 기록](../tmp/architecture-refactoring/final-verification.md), [backend 리뷰](../tmp/architecture-refactoring/backend-review.md), [query 리뷰](../tmp/architecture-refactoring/query-review.md)에 보관했다. 구현·검증 단계에서는 커밋·push·merge·배포·실계정 게시를 수행하지 않았다. 이후 사용자의 커밋 요청에 따라 검증한 코드와 필요한 성장 운영 기반을 `cd3a6a6`에 기록했다. 커밋 준비에서 Pricing.tsx의 EOF 빈 줄 하나를 제거했으며 그 외 소스는 전체 검증 당시와 동일하다. 계획·검증 기록은 별도 문서 커밋으로 기록한다. 기존의 별도 문서 수정과 tmp 산출물은 제외하며 push는 수행하지 않는다.
 
 ## 2026-09-22 macOS Docker·Linux 실행과 SDK 이식성
 
