@@ -5,7 +5,7 @@ import { AppError, object, prohibitSecrets, text } from '../../packages/domain/e
 import type { Store } from '../../packages/storage/index.js';
 import { applyIntegration, detectProjectSdks, previewIntegration, recoverIncomplete, rollbackIntegration, withIntegrationStorage,
   type IntegrationApplyResult, type IntegrationPreview, type IntegrationProvider, type IntegrationRequest } from '../../packages/project-integration/index.js';
-import type { AppService } from './service.js';
+import type { IntegrationHooks } from './contracts.js';
 import { readJournal } from '../../packages/project-integration/journal.js';
 import { MINIMAL_IOS_PBXPROJ } from '../../packages/project-integration/templates/ios.js';
 
@@ -14,7 +14,7 @@ const terminal=new Set(['succeeded','failed','cancelled']);
 /** Renderer selects registered identities; project-controlled files never supply executable changes or storage paths. */
 export class ProjectIntegrations {
   private readonly active=new Set<string>();
-  constructor(private readonly store:Store,private readonly service:AppService,private readonly mode:'demo'|'live'){}
+  constructor(private readonly store:Store,private readonly service:IntegrationHooks,private readonly mode:'demo'|'live'){}
   isBusy(id:string):boolean{return this.active.has(id);}
   assertAvailable(id:string):void{
     if(this.project(id).relinkRequired)throw new AppError('PROJECT_RELINK_REQUIRED','복원한 프로젝트의 원본 폴더를 먼저 연결해 주세요.',409);
@@ -33,7 +33,7 @@ export class ProjectIntegrations {
   private async run<T>(id:string,fn:(project:Project)=>Promise<T>,allowRecovery=false):Promise<T>{
     const project=this.project(id);
     if(!allowRecovery)this.assertAvailable(id);
-    if(this.active.has(id)||this.store.runs(100_000).some(r=>r.projectId===id&&!terminal.has(r.status)))throw new AppError('PROJECT_BUSY','진행 중인 프로젝트 작업을 완료하거나 취소한 뒤 SDK 변경을 적용해 주세요.',409);
+    if(this.active.has(id)||this.store.hasRuns({ projectId: id, statuses: ['queued','running','retry_wait','waiting_external','action_required'] }))throw new AppError('PROJECT_BUSY','진행 중인 프로젝트 작업을 완료하거나 취소한 뒤 SDK 변경을 적용해 주세요.',409);
     this.active.add(id);
     try{
       if(this.mode==='demo')await this.prepareDemo(project);

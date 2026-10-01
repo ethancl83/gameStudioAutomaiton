@@ -15,7 +15,9 @@ import { AppError } from '../domain/errors.js';
 export const X_AUTHORIZE_ENDPOINT = 'https://x.com/i/oauth2/authorize';
 export const X_TOKEN_ENDPOINT = 'https://api.x.com/2/oauth2/token';
 export const X_USERS_ME_ENDPOINT = 'https://api.x.com/2/users/me';
-export const X_DEFAULT_SCOPES = ['tweet.read', 'tweet.write', 'users.read', 'offline.access', 'tweet.moderate.write'];
+// media.write (added 2026-09-24) is required by POST /2/media/upload*; connections
+// authorized before it was added must re-consent before attaching media.
+export const X_DEFAULT_SCOPES = ['tweet.read', 'tweet.write', 'users.read', 'offline.access', 'tweet.moderate.write', 'media.write'];
 
 export const THREADS_AUTHORIZE_ENDPOINT = 'https://threads.com/oauth/authorize';
 export const THREADS_SHORT_TOKEN_ENDPOINT = 'https://graph.threads.com/oauth/access_token';

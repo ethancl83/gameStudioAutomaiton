@@ -7,7 +7,7 @@ import { AppError } from '../../packages/domain/errors.js';
 import { readIpaMetadata, readZipEntry } from '../../packages/connectors/store-tools.js';
 import type { VerifiedArtifact } from '../../packages/connectors/types.js';
 import { androidArtifactMetadata } from '../../packages/inspection/android-artifact.js';
-import { isSecretFile } from '../runner/secrets.js';
+import { isSecretFile } from '../../packages/runner/secrets.js';
 import { within } from './validation.js';
 
 export function importedArtifactPath(directory:string,artifact:ImportedArtifact):string {

@@ -1,50 +1,18 @@
 import { AppError, text } from '../domain/errors.js';
-import type { Connector, ConnectorContext, ConnectorResult, ResourceInput } from './types.js';
-import { countryCode, currencyCode, daysAgo, digits, microsString, ymd } from './marketing-utils.js';
-import { appAdMeetsMinimum, buildAppAdOperations, parseAppAdAssets } from './google-ads-creatives.js';
+import type { AttributionInput, Connector, ConnectorContext, ConnectorResult, ResourceInput } from './types.js';
+import { countryCode, currencyCode, daysAgo, digits, microsString, moneyToMicros, ymd } from './marketing-utils.js';
+import { APP_IMAGE_MAX_BYTES, appAdMeetsMinimum, appImageAssetName, buildAppAdOperations, parseAppAdAssets, validateAppImage } from './google-ads-creatives.js';
+import { readCreativeImage, type CreativeImage } from './creative-media.js';
 import { parseMicros } from '../metrics/index.js';
+import { HOST, customerInfo, headers, search } from './google-ads-client.js';
+export { HOST, customerInfo, headers, search } from './google-ads-client.js';
+import { createExperiment, endExperiment, experimentMetrics, listExperiments, probeExperiments, promoteExperiment, reconcileExperiment } from './google-ads-experiments.js';
 
-const HOST = 'https://googleads.googleapis.com/v25';
-const SCOPE = 'https://www.googleapis.com/auth/adwords';
 const GEO: Record<string, string> = {
   US: '2840', KR: '2410', JP: '2392', GB: '2826', DE: '2276', FR: '2250', CA: '2124', AU: '2036',
   BR: '2076', IN: '2356', ID: '2360', TW: '2158', HK: '2344', SG: '2702', TH: '2764', VN: '2704',
   ES: '2724', IT: '2380', MX: '2484', NL: '2528',
 };
-
-function customerId(ctx: ConnectorContext): string {
-  return digits(ctx.connection.accountId || ctx.credentials.customerId || '', 'Google Ads 고객 ID');
-}
-
-async function headers(ctx: ConnectorContext): Promise<Record<string, string>> {
-  const token = await ctx.accessToken([SCOPE]);
-  const result: Record<string, string> = { Authorization: `Bearer ${token}` };
-  const login = ctx.credentials.loginCustomerId?.replace(/-/g, '');
-  if (login) {
-    if (!/^\d{6,16}$/.test(login)) throw new AppError('INVALID_INPUT', 'loginCustomerId 형식을 확인해 주세요.');
-    result['login-customer-id'] = login;
-  }
-  return result;
-}
-
-async function search<T extends Record<string, unknown>>(ctx: ConnectorContext, query: string, id = customerId(ctx)): Promise<T[]> {
-  const rows: T[] = [];
-  let pageToken = '';
-  const seen = new Set<string>();
-  do {
-    if (seen.has(pageToken) || seen.size >= 50) throw new AppError('PAGINATION_LIMIT', 'Google Ads 목록이 너무 큽니다.');
-    seen.add(pageToken);
-    const body: Record<string, unknown> = { query };
-    if (pageToken) body.pageToken = pageToken;
-    const data = await ctx.request<{ results?: T[]; nextPageToken?: string }>(`${HOST}/customers/${id}/googleAds:search`, {
-      method: 'POST', headers: await headers(ctx), json: body, write: false,
-    });
-    if (data.results !== undefined && !Array.isArray(data.results)) throw new AppError('INVALID_PROVIDER_RESPONSE', 'Google Ads 검색 응답 형식을 확인할 수 없습니다.');
-    rows.push(...(data.results ?? []));
-    pageToken = typeof data.nextPageToken === 'string' ? data.nextPageToken : '';
-  } while (pageToken);
-  return rows;
-}
 
 function campaignResource(row: Record<string, unknown>, currency: string): ResourceInput {
   const campaign = (row.campaign ?? {}) as Record<string, unknown>;
@@ -73,21 +41,6 @@ function campaignResource(row: Record<string, unknown>, currency: string): Resou
   };
 }
 
-async function customerInfo(ctx: ConnectorContext): Promise<{ id: string; currency: string; timeZone: string; name: string; manager: boolean }> {
-  const id = customerId(ctx);
-  const rows = await search<Record<string, unknown>>(ctx, 'SELECT customer.id, customer.descriptive_name, customer.currency_code, customer.time_zone, customer.manager FROM customer');
-  const customer = (rows[0]?.customer ?? {}) as Record<string, unknown>;
-  const currency = typeof customer.currencyCode === 'string' ? customer.currencyCode : '';
-  if (!currency) throw new AppError('INVALID_PROVIDER_RESPONSE', 'Google Ads 계정 통화를 확인할 수 없습니다.');
-  return {
-    id: String(customer.id ?? id),
-    currency,
-    timeZone: String(customer.timeZone ?? ''),
-    name: String(customer.descriptiveName ?? ''),
-    manager: customer.manager === true,
-  };
-}
-
 async function readManager(ctx: ConnectorContext, info: Awaited<ReturnType<typeof customerInfo>>, includeSpend: boolean): Promise<ConnectorResult> {
   // customer_client includes indirect clients too. Metrics must be queried on
   // each advertiser, with the manager retained as login-customer-id.
@@ -96,13 +49,17 @@ async function readManager(ctx: ConnectorContext, info: Awaited<ReturnType<typeo
   if (ids.length > 100) throw new AppError('PAGINATION_LIMIT', '하위 광고 계정이 너무 많습니다. 광고 계정을 개별 연결해 주세요.');
   const resources: ResourceInput[] = [];
   const metrics: NonNullable<ConnectorResult['metrics']> = [];
+  const attribution: AttributionInput[] = [];
   for (const id of ids) {
     const child: ConnectorContext = { ...ctx, connection: { ...ctx.connection, accountId: id }, credentials: { ...ctx.credentials, loginCustomerId: ctx.credentials.loginCustomerId || info.id } };
     const listed = await listCampaigns(child);
     for (const resource of listed.resources ?? []) resources.push({ ...resource, externalId: `${id}:${resource.externalId}`, data: { ...resource.data, customerId: id, managerCustomerId: info.id, readOnly: true } });
-    if (includeSpend) metrics.push(...((await spendMetrics(child)).metrics ?? []));
+    if (includeSpend) {
+      metrics.push(...((await spendMetrics(child)).metrics ?? []));
+      attribution.push(...((await campaignAttribution({}, child)).attribution ?? []));
+    }
   }
-  return { resources, resourceSnapshots: [{ kind: 'campaign' }], ...(includeSpend ? { metrics } : {}), summary: { customerId: info.id, manager: true, accountCount: ids.length, campaignCount: resources.length, ...(includeSpend ? { spendRows: metrics.length } : {}) } };
+  return { resources, resourceSnapshots: [{ kind: 'campaign' }], ...(includeSpend ? { metrics, attribution } : {}), summary: { customerId: info.id, manager: true, accountCount: ids.length, campaignCount: resources.length, ...(includeSpend ? { spendRows: metrics.length, attributionFacts: attribution.length } : {}) } };
 }
 
 async function listCampaigns(ctx: ConnectorContext): Promise<ConnectorResult> {
@@ -132,6 +89,79 @@ async function spendMetrics(ctx: ConnectorContext): Promise<ConnectorResult> {
     });
   }
   return { metrics: [...metrics.values()], summary: { customerId: info.id, currency: info.currency, timeZone: info.timeZone, from: start, to: end, rowCount: metrics.size } };
+}
+
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+function reportDate(value: unknown, label: string, fallback: string): string {
+  if (value === undefined || value === null || value === '') return fallback;
+  const raw = text(value, label, 10);
+  if (!DAY.test(raw) || new Date(`${raw}T00:00:00Z`).toISOString().slice(0, 10) !== raw) throw new AppError('INVALID_INPUT', `${label}는 YYYY-MM-DD 형식이어야 합니다.`);
+  return raw;
+}
+
+function count(value: unknown, label: string): number {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : 0;
+  if (!Number.isFinite(parsed) || parsed < 0) throw new AppError('INVALID_PROVIDER_RESPONSE', `Google Ads ${label} 값 형식을 확인할 수 없습니다.`);
+  return parsed;
+}
+
+/**
+ * App 캠페인·날짜별 귀속 fact. 기존 spend MetricFact(sync)와 별개 기록이며 metrics를 바꾸지 않는다.
+ * - installs: 계정에 DOWNLOAD 분류 전환 액션이 있으면 그 분류의 metrics.conversions, 없으면 전체 metrics.conversions(summary.installsBasis로 구분).
+ * - revenue: metrics.conversions_value = gross_conversion_value(개발자 순수익 아님).
+ * - attributionWindowDays 0 = 각 전환 액션의 공급자 기본 귀속 창을 그대로 사용했다는 기록.
+ */
+async function campaignAttribution(input: Record<string, unknown>, ctx: ConnectorContext): Promise<ConnectorResult> {
+  const end = reportDate(input.endDate, '종료일', ymd());
+  const start = reportDate(input.startDate, '시작일', daysAgo(6));
+  if (start > end) throw new AppError('INVALID_INPUT', '시작일은 종료일보다 늦을 수 없습니다.');
+  if ((Date.parse(end) - Date.parse(start)) / 86_400_000 > 90) throw new AppError('INVALID_INPUT', '조회 기간은 90일 이하여야 합니다.');
+  const info = await customerInfo(ctx);
+  const range = `segments.date BETWEEN '${start}' AND '${end}'`;
+  const rows = await search<Record<string, unknown>>(ctx, `SELECT campaign.id, campaign.app_campaign_setting.app_id, segments.date, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.clicks, metrics.impressions FROM campaign WHERE campaign.advertising_channel_type = 'MULTI_CHANNEL' AND ${range}`);
+  const installActions = await search<Record<string, unknown>>(ctx, `SELECT conversion_action.id FROM conversion_action WHERE conversion_action.category = 'DOWNLOAD' AND conversion_action.status = 'ENABLED'`);
+  const installsBasis = installActions.length ? 'download_conversion_actions' : 'all_conversions_fallback';
+  const installs = new Map<string, number>();
+  if (installActions.length) {
+    // 전환 분류 segment는 전환 지표와만 함께 조회한다. 광고비·클릭 조회와 분리한다.
+    for (const row of await search<Record<string, unknown>>(ctx, `SELECT campaign.id, segments.date, metrics.conversions FROM campaign WHERE campaign.advertising_channel_type = 'MULTI_CHANNEL' AND segments.conversion_action_category = 'DOWNLOAD' AND ${range}`)) {
+      const key = `${String((row.campaign as { id?: unknown } | undefined)?.id ?? '')}:${String((row.segments as { date?: unknown } | undefined)?.date ?? '')}`;
+      installs.set(key, (installs.get(key) ?? 0) + count((row.metrics as Record<string, unknown> | undefined)?.conversions, '설치 전환'));
+    }
+  }
+  const usable = rows.flatMap(row => {
+    const campaign = (row.campaign ?? {}) as Record<string, unknown>;
+    const campaignId = String(campaign.id ?? '');
+    const day = String((row.segments as { date?: unknown } | undefined)?.date ?? '');
+    const appId = (campaign.appCampaignSetting as { appId?: unknown } | undefined)?.appId;
+    // App 캠페인(app_id 있음)만 앱·프로젝트에 귀속할 수 있다.
+    return /^\d+$/.test(campaignId) && DAY.test(day) && typeof appId === 'string' && appId ? [{ campaignId, day, appId, metrics: (row.metrics ?? {}) as Record<string, unknown> }] : [];
+  });
+  const watermark = usable.map(item => item.day).sort().at(-1) ?? end;
+  const observedAt = new Date().toISOString();
+  const attribution: AttributionInput[] = [];
+  for (const { campaignId, day, appId, metrics } of usable) {
+    const common = {
+      campaignId, acquisitionDate: day, eventDate: day, cohortKey: `gads:${campaignId}:${day}`, attributionWindowDays: 0,
+      observedAt, sourceWatermark: watermark, revision: 1, finality: 'estimated' as const, appIdentifier: appId,
+    };
+    const sourceId = (kind: string) => `google-ads:campaign:${info.id}:${campaignId}:${day}:${kind}`;
+    const conversions = count(metrics.conversions, '전환');
+    attribution.push(
+      { ...common, kind: 'spend', currency: info.currency, amountMicros: parseMicros(String(metrics.costMicros ?? '0')).toString(), sourceId: sourceId('spend') },
+      { ...common, kind: 'revenue', currency: info.currency, amountMicros: moneyToMicros(count(metrics.conversionsValue, '전환 가치'), '전환 가치'), revenueBasis: 'gross_conversion_value', sourceId: sourceId('revenue') },
+      { ...common, kind: 'installs', count: installActions.length ? installs.get(`${campaignId}:${day}`) ?? 0 : conversions, sourceId: sourceId('installs') },
+      { ...common, kind: 'conversions', count: conversions, sourceId: sourceId('conversions') },
+      { ...common, kind: 'clicks', count: count(metrics.clicks, '클릭'), sourceId: sourceId('clicks') },
+      { ...common, kind: 'impressions', count: count(metrics.impressions, '노출'), sourceId: sourceId('impressions') },
+    );
+  }
+  return {
+    attribution,
+    summary: { customerId: info.id, currency: info.currency, timeZone: info.timeZone, from: start, to: end, factCount: attribution.length, rowCount: usable.length,
+      installsBasis, attributionWindowDays: 0, attributionWindowNote: '0은 전환 액션별 공급자 기본 귀속 창을 그대로 사용했다는 뜻입니다.', revenueBasis: 'gross_conversion_value', sourceWatermark: watermark },
+  };
 }
 
 function appId(ctx: ConnectorContext, input: Record<string, unknown>): { appId: string; appStore: 'GOOGLE_APP_STORE' | 'APPLE_APP_STORE' } {
@@ -252,13 +282,42 @@ async function assertCreativesReady(ctx: ConnectorContext, campaignId: string): 
   }
 }
 
+/**
+ * 검증된 프로젝트 이미지를 AssetService로 올린다. 결정적 이름(sha256)으로 먼저 찾아 응답 유실 뒤 재시도에도
+ * 같은 asset을 재사용한다. 같은 내용이 다른 이름으로 이미 있으면 Google이 기존 asset을 돌려준다(이름은 무시됨).
+ */
+async function ensureImageAsset(ctx: ConnectorContext, customer: string, image: CreativeImage): Promise<{ resourceName: string; name: string; reused: boolean }> {
+  const name = appImageAssetName(image.sha256);
+  const found = await search<Record<string, unknown>>(ctx, `SELECT asset.resource_name, asset.name, asset.type FROM asset WHERE asset.type = 'IMAGE' AND asset.name = '${name}'`, customer);
+  const existing = (found[0]?.asset as { resourceName?: unknown } | undefined)?.resourceName;
+  if (typeof existing === 'string' && /^customers\/\d+\/assets\/\d+$/.test(existing)) return { resourceName: existing, name, reused: true };
+  const saved = await ctx.request<{ results?: Array<{ resourceName?: string }> }>(`${HOST}/customers/${customer}/assets:mutate`, {
+    method: 'POST', headers: await headers(ctx), write: true,
+    json: { operations: [{ create: { name, type: 'IMAGE', imageAsset: { data: image.bytes.toString('base64') } } }] },
+  });
+  const resourceName = saved.results?.[0]?.resourceName ?? '';
+  if (!/^customers\/\d+\/assets\/\d+$/.test(resourceName)) throw new AppError('INVALID_PROVIDER_RESPONSE', '생성된 이미지 asset 리소스 이름을 확인할 수 없습니다.');
+  ctx.checkpoint({ stage: 'image-asset', assetResourceName: resourceName, assetName: name, sha256: image.sha256 });
+  return { resourceName, name, reused: false };
+}
+
 async function createCreative(input: Record<string, unknown>, ctx: ConnectorContext): Promise<ConnectorResult> {
+  const assets = parseAppAdAssets(input, true);
+  if (!assets) throw new AppError('CREATIVE_REQUIRED', 'App 광고 소재가 필요합니다.');
+  let image: CreativeImage | undefined;
+  let aspectRatio: string | undefined;
+  if (input.mediaAssetId !== undefined && input.mediaAssetId !== '') {
+    text(input.mediaAssetId, '등록 이미지', 100);
+    if (assets.imageAssetResourceNames.length >= 20) throw new AppError('INVALID_INPUT', '이미지 애셋은 업로드 이미지를 포함해 20개 이하여야 합니다.');
+    image = await readCreativeImage(ctx, { allowed: ['image/png', 'image/jpeg'], maxBytes: APP_IMAGE_MAX_BYTES, label: 'Google Ads App 광고' });
+    aspectRatio = validateAppImage(image);
+  }
   const { row, info } = await loadCampaign(ctx, text(input.externalId, '캠페인 식별자', 32));
   const campaign = (row.campaign ?? {}) as Record<string, unknown>;
   const campaignId = String(campaign.id ?? '');
   const resourceName = String(campaign.resourceName ?? '');
-  const assets = parseAppAdAssets(input, true);
-  if (!assets) throw new AppError('CREATIVE_REQUIRED', 'App 광고 소재가 필요합니다.');
+  const uploaded = image ? await ensureImageAsset(ctx, info.id, image) : undefined;
+  if (uploaded && !assets.imageAssetResourceNames.includes(uploaded.resourceName)) assets.imageAssetResourceNames.push(uploaded.resourceName);
   const adGroupTemp = `customers/${info.id}/adGroups/-3`;
   const operations = buildAppAdOperations({
     customerId: info.id,
@@ -274,7 +333,11 @@ async function createCreative(input: Record<string, unknown>, ctx: ConnectorCont
   ctx.checkpoint({ externalId: campaignId, resourceName, stage: 'creative' });
   return {
     resources: [campaignResource(row, info.currency)],
-    summary: { externalId: campaignId, createdCreative: true, headlineCount: assets.headlines.length, descriptionCount: assets.descriptions.length },
+    summary: {
+      externalId: campaignId, createdCreative: true, headlineCount: assets.headlines.length, descriptionCount: assets.descriptions.length,
+      imageCount: assets.imageAssetResourceNames.length,
+      ...(uploaded && image ? { imageAsset: { resourceName: uploaded.resourceName, name: uploaded.name, reused: uploaded.reused, sha256: image.sha256, width: image.width, height: image.height, aspectRatio } } : {}),
+    },
   };
 }
 
@@ -340,7 +403,7 @@ async function pauseCampaign(input: Record<string, unknown>, ctx: ConnectorConte
 export const googleAdsConnector: Connector = {
   capability: {
     provider: 'google-ads', name: 'Google Ads', category: 'marketing',
-    description: '승인된 Google Cloud OAuth 프로젝트로 App 캠페인·AppAd 소재를 만들고 예산·활성/중지를 관리합니다.',
+    description: '승인된 Google Cloud OAuth 프로젝트로 App 캠페인·AppAd 소재(이미지 업로드 포함)를 만들고 예산·활성/중지와 캠페인 귀속 지표를 관리합니다.',
     authKind: 'Google OAuth 또는 서비스 계정 (Cloud 프로젝트 API 접근 수준)',
     fields: [
       { key: 'clientId', label: 'Google OAuth 클라이언트 ID' },
@@ -351,8 +414,38 @@ export const googleAdsConnector: Connector = {
       { key: 'appId', label: '기본 앱 ID (패키지 이름 또는 iTunes ID)' },
       { key: 'itunesId', label: 'iOS iTunes ID (iOS 캠페인)' },
     ],
-    operations: ['check', 'sync', 'list-campaigns', 'create-campaign', 'create-creative', 'update-campaign', 'pause-campaign'],
+    operations: ['check', 'sync', 'list-campaigns', 'campaign-attribution', 'create-campaign', 'create-creative', 'update-campaign', 'pause-campaign',
+      'probe-experiments', 'list-experiments', 'experiment-metrics', 'create-experiment', 'end-experiment', 'promote-experiment'],
     operationFields: {
+      'campaign-attribution': [
+        { key: 'startDate', type: 'date', required: false, label: '시작일', hint: '생략하면 6일 전' },
+        { key: 'endDate', type: 'date', required: false, label: '종료일', hint: '생략하면 오늘. 최대 90일' },
+      ],
+      'probe-experiments': [],
+      'list-experiments': [],
+      'experiment-metrics': [
+        { key: 'experimentId', type: 'text', required: true, label: '실험 ID', hint: 'list-experiments의 숫자 실험 ID' },
+        { key: 'startDate', type: 'date', required: true, label: '시작일' },
+        { key: 'endDate', type: 'date', required: true, label: '종료일', hint: '최대 180일. 실험 기간 밖 날짜는 제외합니다.' },
+        { key: 'attributionWindowDays', type: 'text', required: false, label: '귀속 창(일)', placeholder: '0', hint: '0 또는 생략은 계정 전환 액션 기본 창을 그대로 사용했다는 기록입니다.' },
+      ],
+      'create-experiment': [
+        { key: 'name', type: 'text', required: true, label: '실험 이름', hint: '뒤에 [gso:요청 키]가 붙어 재시도 시 같은 실험을 찾습니다.' },
+        { key: 'requestKey', type: 'text', required: true, label: '요청 키', hint: '영문·숫자·_·- 8–64자. 같은 요청의 재시도에는 같은 값을 씁니다.' },
+        { key: 'controlCampaignId', type: 'text', required: true, label: 'control 캠페인 ID' },
+        { key: 'treatmentCampaignId', type: 'text', required: true, label: 'treatment 캠페인 ID', hint: '기존 캠페인. Campaign Mix는 in-design 초안을 만들지 않습니다.' },
+        { key: 'controlTrafficSplit', type: 'text', required: false, label: 'control 트래픽(%)', placeholder: '50', hint: '1–99 정수. 나머지가 treatment입니다.' },
+        { key: 'startDate', type: 'date', required: false, label: '시작일' },
+        { key: 'endDate', type: 'date', required: false, label: '종료일' },
+        { key: 'description', type: 'textarea', required: false, label: '설명' },
+        { key: 'schedule', type: 'select', required: false, label: '바로 일정 요청', options: [{ value: 'false', label: '아니요(SETUP 유지)' }, { value: 'true', label: '예' }] },
+      ],
+      'end-experiment': [
+        { key: 'experimentId', type: 'text', required: true, label: '실험 ID' },
+      ],
+      'promote-experiment': [
+        { key: 'experimentId', type: 'text', required: true, label: '실험 ID', hint: 'system-managed 실험만. Campaign Mix는 거부합니다.' },
+      ],
       'create-campaign': [
         { key: 'name', type: 'text', required: true, label: '캠페인 이름' },
         { key: 'dailyBudgetMicros', type: 'money', required: true, label: '일일 예산' },
@@ -362,14 +455,15 @@ export const googleAdsConnector: Connector = {
         { key: 'country', type: 'text', required: false, label: '국가', placeholder: 'US' },
         { key: 'headlines', type: 'textarea', required: false, label: '헤드라인 JSON 배열', hint: '["문구1","문구2"] 2–5개, 각 30자. 있으면 광고그룹·AppAd를 같은 mutate에 포함합니다.', placeholder: '["앱 설치","지금 플레이"]' },
         { key: 'descriptions', type: 'textarea', required: false, label: '설명 JSON 배열', hint: '["설명"] 1–5개, 각 90자.', placeholder: '["무료로 플레이하세요"]' },
-        { key: 'imageAssetResourceNames', type: 'textarea', required: false, label: '이미지 애셋 리소스 JSON 배열', hint: '기존 customers/{id}/assets/{id}만. 바이너리 업로드 없음.' },
+        { key: 'imageAssetResourceNames', type: 'textarea', required: false, label: '이미지 애셋 리소스 JSON 배열', hint: '기존 customers/{id}/assets/{id}만. 새 이미지 업로드는 create-creative의 mediaAssetId를 사용합니다.' },
         { key: 'youtubeVideoIds', type: 'textarea', required: false, label: 'YouTube 동영상 ID JSON 배열', hint: '11자 동영상 ID. YoutubeVideoAsset으로 생성합니다.' },
         { key: 'objective', remove: true },
       ],
       'create-creative': [
         { key: 'headlines', type: 'textarea', required: true, label: '헤드라인 JSON 배열', hint: '["문구1","문구2"] 2–5개, 각 30자.' },
         { key: 'descriptions', type: 'textarea', required: true, label: '설명 JSON 배열', hint: '["설명"] 1–5개, 각 90자.' },
-        { key: 'imageAssetResourceNames', type: 'textarea', required: false, label: '이미지 애셋 리소스 JSON 배열' },
+        { key: 'mediaAssetId', type: 'text', required: false, label: '등록 이미지', hint: '프로젝트에 등록한 PNG·JPEG. 5MB 이하, 1:1(200x200 이상)·1.91:1(600x314 이상)·4:5(320x400 이상). AssetService로 올린 뒤 AppAd에 넣습니다.' },
+        { key: 'imageAssetResourceNames', type: 'textarea', required: false, label: '이미지 애셋 리소스 JSON 배열', hint: '기존 customers/{id}/assets/{id}. 업로드 이미지 포함 20개 이하.' },
         { key: 'youtubeVideoIds', type: 'textarea', required: false, label: 'YouTube 동영상 ID JSON 배열' },
       ],
       'update-campaign': [
@@ -384,10 +478,17 @@ export const googleAdsConnector: Connector = {
     limitations: [
       'developer token은 2026-09-09에 종료되었습니다. 신규 온보딩에 developerToken을 요구하지 않으며 요청 헤더에도 넣지 않습니다. 접근 수준은 OAuth/서비스 계정의 Cloud 프로젝트가 결정합니다.',
       'App 캠페인(MULTI_CHANNEL/APP_CAMPAIGN)만 생성하며 항상 PAUSED입니다. 공유 예산·포트폴리오 입찰은 사용할 수 없습니다.',
-      '헤드라인 2–5개(30자)·설명 1–5개(90자)를 주면 같은 mutate에 광고그룹(type 미지정)과 AppAd를 만듭니다. 이미지 바이너리 업로드는 하지 않고 기존 asset 리소스·YouTube ID만 받습니다.',
+      '헤드라인 2–5개(30자)·설명 1–5개(90자)를 주면 같은 mutate에 광고그룹(type 미지정)과 AppAd를 만듭니다. create-campaign은 기존 asset 리소스·YouTube ID만 받습니다.',
+      'create-creative의 mediaAssetId는 프로젝트에 등록·검증된 PNG/JPEG를 AssetService(assets:mutate, imageAsset.data)로 올립니다. 5MB(5 MiB로 해석) 이하, 1:1·1.91:1·4:5 비율과 최소 크기를 전송 전에 검사하며 비율 허용 오차 1%는 공식 규정이 아닌 가정입니다. WebP는 거부합니다.',
+      '이미지 asset 이름은 gso-image-{sha256}입니다. 업로드 전에 이 이름을 검색해 응답 유실 뒤 재시도에도 같은 asset을 재사용합니다. 같은 내용이 다른 이름으로 이미 있으면 Google이 기존 asset을 돌려주며 이름은 바뀌지 않습니다(공식 문서). 이미지 업로드와 AppAd 생성은 별도 mutate라 AppAd 단계에서 실패하면 asset만 남습니다.',
+      'campaign-attribution과 sync는 App 캠페인(app_id 있음)·날짜별 spend·revenue(gross_conversion_value)·installs·conversions·clicks·impressions 귀속 fact를 남깁니다. installs는 DOWNLOAD 분류 전환 액션이 있으면 그 전환만, 없으면 전체 conversions입니다(summary.installsBasis). attributionWindowDays 0은 전환 액션별 기본 귀속 창입니다. 기존 spend 지표는 바꾸지 않습니다.',
       'ENABLED는 해당 캠페인에 최소 AppAd가 확인된 뒤에만 허용합니다. 소재 없이 활성으로 올리지 않습니다.',
       '예산 변경 전에 explicitly_shared=false 와 해당 예산을 쓰는 다른 캠페인이 없음을 확인합니다.',
       '실계정 쓰기·지출은 이 모듈의 단위 테스트에서 수행하지 않습니다.',
+      'App 캠페인(APP_CAMPAIGN)은 표준 system-managed 실험 유형에 없습니다. App 캠페인의 native A/B는 allowlist 계정 전용 Campaign Mix(COMPARE_CAMPAIGNS)로만 가능하며, create-experiment는 이 유형만 만듭니다.',
+      'Campaign Mix 실험은 공식 문서상 End/Graduate만 안내되어 promote-experiment를 거부합니다. schedule(ScheduleExperiment)과 suffix 없는 생성은 실계정 검증이 필요합니다.',
+      '실험 지표는 arm 캠페인의 일별 캠페인 지표입니다. 같은 캠페인이 여러 arm에 있거나 arm 분할이 없으면 배정 근거가 없어 관찰 비교로만 써야 합니다. 전환 가치는 gross_conversion_value 기준입니다.',
+      'AppLovin Axon(applovin-ads) 획득 캠페인 A/B는 지원하지 않습니다(관찰 비교만). MAX 실험은 수익화 실험이며 획득 A/B가 아닙니다.',
     ],
   },
   async execute(operation, input, ctx) {
@@ -401,9 +502,23 @@ export const googleAdsConnector: Connector = {
       if (info.manager) return readManager(ctx, info, true);
       const listed = await listCampaigns(ctx);
       const spend = await spendMetrics(ctx);
-      return { resources: listed.resources, resourceSnapshots: listed.resourceSnapshots, metrics: spend.metrics, summary: { ...listed.summary, spendRows: spend.summary.rowCount } };
+      const attributed = await campaignAttribution({}, ctx);
+      return { resources: listed.resources, resourceSnapshots: listed.resourceSnapshots, metrics: spend.metrics, attribution: attributed.attribution,
+        summary: { ...listed.summary, spendRows: spend.summary.rowCount, attributionFacts: attributed.attribution?.length ?? 0, installsBasis: attributed.summary.installsBasis } };
     }
-    if (['create-campaign', 'create-creative', 'update-campaign', 'pause-campaign'].includes(operation) && (await customerInfo(ctx)).manager) throw new AppError('ADVERTISER_ACCOUNT_REQUIRED', '관리자 연결은 하위 계정 조회용입니다. 캠페인을 변경하려면 해당 광고 계정을 별도로 연결해 주세요.');
+    if (operation === 'campaign-attribution') {
+      const info = await customerInfo(ctx);
+      if (info.manager) throw new AppError('ADVERTISER_ACCOUNT_REQUIRED', '관리자 연결의 캠페인 귀속은 sync로 하위 계정별로 수집합니다. 개별 조회는 광고 계정을 연결해 주세요.');
+      return campaignAttribution(input, ctx);
+    }
+    if (operation === 'probe-experiments') return probeExperiments(ctx);
+    if (['create-campaign', 'create-creative', 'update-campaign', 'pause-campaign', 'list-experiments', 'experiment-metrics', 'create-experiment', 'end-experiment', 'promote-experiment'].includes(operation) && (await customerInfo(ctx)).manager) throw new AppError('ADVERTISER_ACCOUNT_REQUIRED', '관리자 연결은 하위 계정 조회용입니다. 캠페인·실험을 다루려면 해당 광고 계정을 별도로 연결해 주세요.');
+    if (operation === 'list-experiments') return listExperiments(ctx);
+    if (operation === 'experiment-metrics') return experimentMetrics(input, ctx);
+    if (operation === 'create-experiment') return createExperiment(input, ctx);
+    if (operation === 'end-experiment') return endExperiment(input, ctx);
+    if (operation === 'promote-experiment') return promoteExperiment(input, ctx);
+    if (operation === 'reconcile' && input.experimentId !== undefined) return reconcileExperiment(input, ctx);
     if (operation === 'create-campaign') return createCampaign(input, ctx);
     if (operation === 'create-creative') return createCreative(input, ctx);
     if (operation === 'update-campaign') return updateCampaign(input, ctx);

@@ -335,67 +335,138 @@ async function listReleases(context: ConnectorContext): Promise<ConnectorResult>
   };
 }
 
+// Financial corrections (verified 2026-09-24,
+// https://partner.steamgames.com/doc/webapi/IPartnerFinancialsService):
+// GetChangedDatesForPartner(highwatermark) lists PT dates whose financial data
+// was newly calculated or recalculated; the caller stores result_highwatermark
+// and must replace (not add to) its local rows for each returned date by
+// re-reading GetDetailedSales from highwatermark_id=0. The first call uses 0 and
+// returns every date ever sold; that call only establishes the baseline here
+// (the regular recent window is still collected) instead of back-filling all
+// history. Corrections found later are replaced atomically per date through
+// metricSourcePrefixes. Dates beyond the per-sync bound stay queued in the
+// vault so the cursor can advance without dropping any correction.
+const DETAILED_SALES_MAX_PAGES = 100;
+const CHANGED_DATES_PER_SYNC = 31;
+const FINANCIAL_HWM_KEY = 'steamFinancialHighwatermark';
+const FINANCIAL_PENDING_KEY = 'steamFinancialPendingDates';
+
+interface DateSales { total: bigint; gross: bigint; returns: bigint; perApp: Map<string, bigint>; sawRows: boolean }
+
+/** Steam dates are PT calendar days: accept YYYY/MM/DD or YYYY-MM-DD and normalize to YYYY-MM-DD. */
+function normalizeSteamDate(value: unknown): string {
+  const match = typeof value === 'string' ? /^(\d{4})[/-](\d{2})[/-](\d{2})$/.exec(value) : null;
+  if (!match) throw new AppError('INVALID_PROVIDER_RESPONSE', 'Steam 변경 날짜 형식을 확인할 수 없습니다.');
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+async function fetchDetailedSales(context: ConnectorContext, key: string, date: string): Promise<DateSales> {
+  const usd = (value: unknown): bigint =>
+    typeof value === 'string' ? decimalToMicros(value) : typeof value === 'number' ? decimalToMicros(String(value)) : 0n;
+  const sales: DateSales = { total: 0n, gross: 0n, returns: 0n, perApp: new Map(), sawRows: false };
+  let highwatermark = '0';
+  for (let page = 0; page < DETAILED_SALES_MAX_PAGES; page += 1) {
+    context.signal.throwIfAborted();
+    const payload = await context.request<Record<string, unknown>>(
+      withKey('/IPartnerFinancialsService/GetDetailedSales/v001/', key, { date, highwatermark_id: highwatermark }),
+    );
+    const response = asRecord(payload.response);
+    const results = Array.isArray(response.results) ? response.results.map(asRecord) : [];
+    if (results.length === 0) return sales;
+    sales.sawRows = true;
+    for (const row of results) {
+      // Rows are keyed strictly by appid (never by app name) and amounts
+      // come from the documented USD fields: net_sales_usd is net of
+      // returns and taxes; gross/returns are kept for reconciliation.
+      const amount = usd(row.net_sales_usd);
+      sales.total += amount;
+      sales.gross += usd(row.gross_sales_usd);
+      sales.returns += usd(row.gross_returns_usd);
+      const appid = String(row.appid ?? 'unknown');
+      sales.perApp.set(appid, (sales.perApp.get(appid) ?? 0n) + amount);
+    }
+    const maxId = String(response.max_id ?? '');
+    if (!maxId || maxId === highwatermark) return sales;
+    highwatermark = maxId;
+  }
+  // A partial day would under-report (and, for a correction, replace good rows
+  // with a partial total). Fail instead so the cursor does not advance.
+  throw new AppError('PROVIDER_LIMIT', `Steam ${date} 매출 상세가 ${DETAILED_SALES_MAX_PAGES}페이지를 넘어 한 번에 수집하지 못했습니다.`);
+}
+
+async function changedFinancialDates(context: ConnectorContext, key: string): Promise<{ baseline: boolean; previous: string; highwatermark: string; changed: string[]; queue: string[] }> {
+  const previous = context.credentials[FINANCIAL_HWM_KEY] ?? '';
+  if (previous && !/^\d{1,20}$/.test(previous)) throw new AppError('INVALID_STATE', '저장된 Steam 재무 highwatermark 값이 올바르지 않습니다.');
+  let pending: string[] = [];
+  if (context.credentials[FINANCIAL_PENDING_KEY]) {
+    try { pending = (JSON.parse(context.credentials[FINANCIAL_PENDING_KEY]) as unknown[]).map(normalizeSteamDate); }
+    catch { throw new AppError('INVALID_STATE', '저장된 Steam 재수집 대기 날짜 목록이 올바르지 않습니다.'); }
+  }
+  const payload = await context.request<Record<string, unknown>>(
+    withKey('/IPartnerFinancialsService/GetChangedDatesForPartner/v001/', key, { highwatermark: previous || '0' }),
+  );
+  const response = asRecord(payload.response);
+  const highwatermark = String(response.result_highwatermark ?? '');
+  if (!/^\d{1,20}$/.test(highwatermark)) throw new AppError('INVALID_PROVIDER_RESPONSE', 'Steam 변경 날짜 highwatermark를 확인할 수 없습니다.');
+  const changed = Array.isArray(response.dates) ? response.dates.map(normalizeSteamDate) : [];
+  const baseline = !previous;
+  // Newest first: recent corrections matter most and the queue drains oldest last.
+  const queue = [...new Set([...pending, ...(baseline ? [] : changed)])].sort().reverse();
+  return { baseline, previous, highwatermark, changed, queue };
+}
+
 async function syncFinancials(context: ConnectorContext): Promise<ConnectorResult> {
   const key = financialKey(context);
+  const cursor = await changedFinancialDates(context, key);
   const metrics: MetricInput[] = [];
   const perApp = new Map<string, bigint>();
   const collectedDates: string[] = [];
   let grossUsdMicros = 0n;
   let returnsUsdMicros = 0n;
-  const usd = (value: unknown): bigint =>
-    typeof value === 'string' ? decimalToMicros(value) : typeof value === 'number' ? decimalToMicros(String(value)) : 0n;
   // GetDetailedSales reports in Pacific time; shift 8 hours so "yesterday" exists.
   const pacificNow = Date.now() - 8 * 60 * 60 * 1000;
-  for (let daysAgo = 1; daysAgo <= 7; daysAgo += 1) {
-    context.signal.throwIfAborted();
-    const date = new Date(pacificNow - daysAgo * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    let highwatermark = '0';
-    let total = 0n;
-    let sawRows = false;
-    for (let page = 0; page < 20; page += 1) {
-      const payload = await context.request<Record<string, unknown>>(
-        withKey('/IPartnerFinancialsService/GetDetailedSales/v001/', key, { date, highwatermark_id: highwatermark }),
-      );
-      const response = asRecord(payload.response);
-      const results = Array.isArray(response.results) ? response.results.map(asRecord) : [];
-      if (results.length === 0) break;
-      sawRows = true;
-      for (const row of results) {
-        // Rows are keyed strictly by appid (never by app name) and amounts
-        // come from the documented USD fields: net_sales_usd is net of
-        // returns and taxes; gross/returns are kept for reconciliation.
-        const amount = usd(row.net_sales_usd);
-        total += amount;
-        grossUsdMicros += usd(row.gross_sales_usd);
-        returnsUsdMicros += usd(row.gross_returns_usd);
-        const appid = String(row.appid ?? 'unknown');
-        perApp.set(appid, (perApp.get(appid) ?? 0n) + amount);
-      }
-      const maxId = String(response.max_id ?? '');
-      if (!maxId || maxId === highwatermark) break;
-      highwatermark = maxId;
-    }
-    if (sawRows) {
+  const recent = Array.from({ length: 7 }, (_, index) => new Date(pacificNow - (index + 1) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  const corrected = cursor.queue.slice(0, CHANGED_DATES_PER_SYNC);
+  const remaining = cursor.queue.slice(CHANGED_DATES_PER_SYNC);
+  const replace = new Set(corrected);
+  for (const date of [...new Set([...recent, ...corrected])]) {
+    const sales = await fetchDetailedSales(context, key, date);
+    grossUsdMicros += sales.gross;
+    returnsUsdMicros += sales.returns;
+    for (const [appid, amount] of sales.perApp) perApp.set(appid, (perApp.get(appid) ?? 0n) + amount);
+    // A corrected date with no rows left is replaced by an explicit zero, not left stale.
+    if (sales.sawRows || replace.has(date)) {
       collectedDates.push(date);
       metrics.push({
         date,
         currency: 'USD',
         kind: 'revenue',
-        amountMicros: total.toString(),
+        amountMicros: sales.total.toString(),
         basis: 'estimated',
         sourceId: `steam:detailed-sales:${date}`,
       });
     }
   }
+  // Persist the cursor only after every date was read completely; a failure
+  // above leaves the previous highwatermark so the same corrections return.
+  const pendingValue = JSON.stringify(remaining);
+  if (cursor.highwatermark !== cursor.previous || pendingValue !== (context.credentials[FINANCIAL_PENDING_KEY] ?? '[]')) {
+    await context.saveCredentials({ ...context.credentials, [FINANCIAL_HWM_KEY]: cursor.highwatermark, [FINANCIAL_PENDING_KEY]: pendingValue });
+  }
   return {
     summary: {
       collectedDates,
+      correctedDates: corrected,
+      pendingCorrectedDates: remaining.length,
+      financialHighwatermark: cursor.highwatermark,
+      ...(cursor.baseline ? { financialBaseline: true } : {}),
       perApp: Object.fromEntries([...perApp].slice(0, 50).map(([appid, amount]) => [appid, amount.toString()])),
       grossUsdMicros: grossUsdMicros.toString(),
       returnsUsdMicros: returnsUsdMicros.toString(),
       note: '세금·환불 차감 후 USD 순매출(net_sales_usd) 합계입니다. Steam 수익 배분 차감 전 금액이라 basis=estimated로 기록합니다.',
     },
     metrics,
+    ...(corrected.length ? { metricSourcePrefixes: corrected.map(date => `steam:detailed-sales:${date}`) } : {}),
   };
 }
 
@@ -421,7 +492,7 @@ const capability: Capability = {
   provider: 'steam',
   name: 'Steamworks',
   category: 'store',
-  description: 'Steamworks 파트너 API로 앱 목록·빌드·브랜치를 조회하고, SetAppBuildLive로 브랜치를 전환하며, 전용 빌드 계정의 SteamCMD 세션으로 빌드를 업로드하고, 일별 순매출을 수집합니다.',
+  description: 'Steamworks 파트너 API로 앱 목록·빌드·브랜치를 조회하고, SetAppBuildLive로 브랜치를 전환하며, 전용 빌드 계정의 SteamCMD 세션으로 빌드를 업로드하고, 일별 순매출과 정정된 날짜를 수집합니다.',
   authKind: 'api-key-cli-session',
   fields: [
     { key: 'apiKey', label: '파트너 Web API 키 (게시자)', secret: true, required: true },
@@ -451,6 +522,7 @@ const capability: Capability = {
     '커뮤니티 공지 작성은 공개 Web API가 없어 Steamworks 이벤트 도구에서 수행해야 합니다. 가짜 엔드포인트를 호출하지 않습니다.',
     '상품/가격 관리는 Steamworks 파트너 사이트 전용이라 지원하지 않습니다.',
     '매출은 USD 순매출 기준이며 Steam 수익 배분 차감 전 금액입니다.',
+    '매출 정정은 GetChangedDatesForPartner의 highwatermark를 연결 보관소에 저장해 추적하고, 바뀐 날짜는 GetDetailedSales로 다시 읽어 그 날짜 값을 교체합니다. 첫 동기화는 기준점만 저장하며 과거 전체 이력을 소급 수집하지 않고, 한 번에 31일까지 재수집하고 나머지는 다음 동기화로 넘깁니다.',
     '실계정 검증 전입니다. 모든 엔드포인트는 공식 문서 기준으로 구현되었습니다.',
   ],
 };

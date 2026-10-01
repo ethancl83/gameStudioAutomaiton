@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import type { Writable } from 'node:stream';
 import { AppError } from '../domain/errors.js';
-import { probeIsolation } from '../../apps/runner/sandbox.js';
+import { probeIsolation } from '../runner/sandbox.js';
 
 const TMPFS_MAGIC = 0x01021994;
 
@@ -42,7 +42,8 @@ export async function runTrustedTool(executable: string, args: string[], options
   scripts?: Record<string, string>;
 }): Promise<{ stdout: string; stderr: string }> {
   const probe = await probeIsolation();
-  if (!probe.available || !probe.executable) throw new AppError('ISOLATION_UNAVAILABLE', '키 작업을 격리할 수 없어 실행하지 않았습니다.');
+  // 키 도구 실행은 bwrap 플래그(tmpfs·네임스페이스)를 전제로 한다. macOS Seatbelt 빌드 격리로 대신하지 않는다.
+  if (!probe.available || !probe.executable || probe.backend !== 'bwrap') throw new AppError('ISOLATION_UNAVAILABLE', '키 작업을 격리할 수 없어 실행하지 않았습니다.');
   const tool = await realpath(executable);
   const roots = new Set<string>();
   for (const root of options.readRoots ?? []) roots.add(await realpath(root));

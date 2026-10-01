@@ -17,6 +17,7 @@ import {
   Rocket,
   ServerCog,
   Settings2,
+  TrendingUp,
   UploadCloud,
   Users,
   Wifi,
@@ -40,8 +41,10 @@ import { HistoryView } from './views/HistoryView';
 import { SettingsView } from './views/SettingsView';
 import { DevelopmentView } from './views/DevelopmentView';
 import { WebDeploymentsView } from './views/WebDeploymentsView';
+import { GrowthView } from './views/GrowthView';
 import { ModeControl } from './components/ModeControl';
 import { AgentPanel } from './components/AgentPanel';
+import { DeviceTransferBanner } from './components/DeviceTransferBanner';
 import { AgentActions } from './components/AgentActions';
 import { SCREEN_REQUESTS } from '../../../packages/agent/requests';
 import type { AgentRequestContext } from '../../../packages/agent/types';
@@ -61,7 +64,8 @@ export type ViewKey =
   | 'history'
   | 'settings'
   | 'development'
-  | 'web-deployments';
+  | 'web-deployments'
+  | 'growth';
 
 interface NavDef {
   key: ViewKey;
@@ -133,6 +137,12 @@ const NAV: NavDef[] = [
     count: (s) => s.resources.filter((r) => r.kind === 'post' || r.kind === 'mention' || r.kind === 'news').length,
   },
   {
+    key: 'growth',
+    label: '성장 운영',
+    icon: TrendingUp,
+    desc: '위임한 범위·기간 안의 광고 실험·ROAS/순이익 ROI·고객응대·피드백 이슈',
+  },
+  {
     key: 'operations',
     label: '운영·복구',
     icon: ServerCog,
@@ -162,7 +172,7 @@ export function App() {
   const { state, phase, refresh, refreshing, lastUpdatedAt, error, mode } = useAppState();
   const [view, setView] = useState<ViewKey>('agent');
   const [switching, setSwitching] = useState(false);
-  const [scope, setScope] = useState<Pick<AgentRequestContext, 'projectId' | 'connectionId'>>({});
+  const [scope, setScope] = useState<Pick<AgentRequestContext, 'projectId' | 'connectionId' | 'selection'>>({});
   const [agentOpen, setAgentOpen] = useState(false);
   const closeAgent = useCallback(() => setAgentOpen(false), []);
   const [chatContext, setChatContext] = useState<AgentRequestContext>({ screen: 'agent' });
@@ -273,6 +283,7 @@ export function App() {
         </header>
 
         <main className="content">
+          {state?.runtime.deviceTransferredAt && <DeviceTransferBanner transferredAt={state.runtime.deviceTransferredAt} refresh={refresh} />}
           <ViewRouter
             view={view}
             state={state}
@@ -285,7 +296,7 @@ export function App() {
       </div>
     </div>
     {agentOpen && state && <Modal title="AI 대화" onClose={closeAgent} wide>
-      <AgentPanel key={`${chatContext.screen}:${chatContext.projectId ?? ''}:${chatContext.connectionId ?? ''}`} state={state} projectId={chatContext.projectId ?? null} requestContext={chatContext} />
+      <AgentPanel key={`${chatContext.screen}:${chatContext.projectId ?? ''}:${chatContext.connectionId ?? ''}:${chatContext.selection?.kind ?? ''}:${chatContext.selection?.id ?? ''}:${chatContext.selection?.revision ?? ''}`} state={state} projectId={chatContext.projectId ?? null} requestContext={chatContext} />
     </Modal>}
     </AgentActions.Provider>
   );
@@ -375,6 +386,8 @@ function ViewRouter({
       return <MonetizationView state={state} refresh={refresh} goTo={goTo} />;
     case 'community':
       return <CommunityView state={state} refresh={refresh} goTo={goTo} />;
+    case 'growth':
+      return <GrowthView state={state} goTo={goTo} />;
     case 'operations':
       return <OperationsView state={state} refresh={refresh} goTo={goTo} />;
     case 'history':

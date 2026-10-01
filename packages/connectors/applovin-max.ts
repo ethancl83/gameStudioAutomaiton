@@ -1,29 +1,21 @@
 import { AppError, text } from '../domain/errors.js';
 import type { Connector, ConnectorContext, ConnectorResult, ResourceInput } from './types.js';
-import { daysAgo, headerAuth, moneyToMicros, ymd } from './marketing-utils.js';
+import { daysAgo, moneyToMicros, ymd } from './marketing-utils.js';
 import { maxSdkConfig } from './sdk-integration.js';
+import { HOST, auth } from './applovin-max-client.js';
+export { HOST, auth } from './applovin-max-client.js';
+import { createAdUnitExperiment, deprecateAdUnitExperiment, listAdUnitExperiments, probeAdUnitExperiments, promoteAdUnitExperiment } from './applovin-max-experiments.js';
 
-const HOST = 'https://o.applovin.com/mediation/v1';
 const REPORT = 'https://r.applovin.com/maxReport';
 const FORMATS: Record<string, string> = {
   banner: 'BANNER', interstitial: 'INTER', inter: 'INTER', rewarded: 'REWARD', reward: 'REWARD',
   mrec: 'MREC', native: 'NATIVE', appopen: 'APPOPEN', app_open: 'APPOPEN',
 };
 
-function managementKey(ctx: ConnectorContext): string {
-  const key = ctx.credentials.managementKey || ctx.credentials.apiKey;
-  if (!key) throw new AppError('AUTH_REQUIRED', 'MAX Management Key가 필요합니다. 광고 Campaign Management 키와 다릅니다.');
-  return key;
-}
-
 function reportKey(ctx: ConnectorContext): string {
   const key = ctx.credentials.reportKey;
   if (!key) throw new AppError('AUTH_REQUIRED', 'MAX Report Key가 필요합니다.');
   return key;
-}
-
-function auth(ctx: ConnectorContext): Record<string, string> {
-  return headerAuth('api-key', managementKey(ctx));
 }
 
 function unitResource(item: Record<string, unknown>): ResourceInput {
@@ -137,8 +129,32 @@ export const applovinMaxConnector: Connector = {
       { key: 'platform', label: '기본 플랫폼 (ios 또는 android)' },
       { key: 'sdkKey', label: 'MAX SDK Key (대시보드 Keys, 선택)', secret: true },
     ],
-    operations: ['check', 'sync', 'list-ad-units', 'create-ad-unit', 'update-ad-unit', 'sdk-integration-config'],
+    operations: ['check', 'sync', 'list-ad-units', 'create-ad-unit', 'update-ad-unit', 'sdk-integration-config',
+      'probe-ad-unit-experiments', 'list-ad-unit-experiments', 'create-ad-unit-experiment', 'promote-ad-unit-experiment', 'deprecate-ad-unit-experiment'],
     operationFields: {
+      'probe-ad-unit-experiments': [],
+      'list-ad-unit-experiments': [
+        { key: 'adUnitId', type: 'text', required: true, label: '광고 단위 ID' },
+        { key: 'segmentId', type: 'text', required: false, label: '세그먼트 ID', hint: '세그먼트 waterfall 실험 조회 시에만' },
+      ],
+      'create-ad-unit-experiment': [
+        { key: 'adUnitId', type: 'text', required: true, label: '광고 단위 ID', hint: '활성 실험이 있으면 거부합니다(같은 이름이면 재사용).' },
+        { key: 'experimentName', type: 'text', required: true, label: '실험 이름' },
+        { key: 'testGroupAllocation', type: 'select', required: false, label: '테스트 그룹 비율(%)', options: [
+          { value: '50', label: '50' }, { value: '25', label: '25' }, { value: '10', label: '10' }, { value: '5', label: '5' },
+        ] },
+        { key: 'adNetworkSettings', type: 'textarea', required: false, label: 'ad_network_settings JSON 배열', hint: '공식 광고 단위 설정 형식. 지정하지 않은 설정은 부모 광고 단위를 따릅니다.' },
+        { key: 'frequencyCappingSettings', type: 'textarea', required: false, label: 'frequency_capping_settings JSON 배열' },
+        { key: 'bidFloors', type: 'textarea', required: false, label: 'bid_floors JSON 배열', placeholder: '[{"country_group_name":"t1","cpm":"10.00","countries":{"type":"INCLUDE","values":["us"]}}]' },
+      ],
+      'promote-ad-unit-experiment': [
+        { key: 'adUnitId', type: 'text', required: true, label: '광고 단위 ID' },
+        { key: 'experimentName', type: 'text', required: true, label: '실험 이름', hint: '현재 활성 실험 이름과 같아야 합니다.' },
+      ],
+      'deprecate-ad-unit-experiment': [
+        { key: 'adUnitId', type: 'text', required: true, label: '광고 단위 ID' },
+        { key: 'experimentName', type: 'text', required: true, label: '실험 이름', hint: '현재 활성 실험 이름과 같아야 합니다.' },
+      ],
       'create-ad-unit': [
         { key: 'name', type: 'text', required: true, label: '광고 단위 이름' },
         { key: 'format', type: 'select', required: true, label: '형식', options: [
@@ -160,6 +176,9 @@ export const applovinMaxConnector: Connector = {
       '같은 앱/플랫폼/형식에 활성 광고 단위가 있으면 API가 추가 생성을 거부할 수 있습니다.',
       '수익 보고는 USD 추정값이며 UTC, 최근 45일입니다. network 열을 넣지 않아 AdMob 원천과 이중 합산하지 않습니다.',
       '캠페인 생성은 MAX 범위가 아닙니다.',
+      'MAX 광고 단위 실험은 미디에이션 waterfall·빈도 제한·bid floor 수익화 실험이며 사용자 획득 광고 A/B가 아닙니다. AppLovin Axon 획득 A/B는 지원하지 않습니다(관찰 비교만).',
+      '광고 단위당 활성 실험은 하나입니다. 생성 직전에 광고 단위를 다시 읽어 has_active_experiment와 프로젝트 패키지 소유권을 확인합니다. 세그먼트 실험은 조회만 지원합니다.',
+      '실험 생성·promote·deprecate는 공식 문서와 모의 응답으로만 검증했습니다(실계정 쓰기 검증 필요).',
       'sdk-integration-config는 광고 단위 ID·패키지와 SDK Key 설정 여부(sdkKeyConfigured)만 반환합니다. SDK Key 값은 vault에 남고 요약·매니페스트·작업 이력에 넣지 않습니다. Android/iOS는 공식 initializer를 안내하며 iOS에 AndroidManifest를 쓰지 않습니다.',
     ],
   },
@@ -182,6 +201,11 @@ export const applovinMaxConnector: Connector = {
       const listed = await listAdUnits(ctx);
       return { resources: listed.resources, summary: maxSdkConfig(listed.resources ?? [], ctx.credentials.sdkKey) };
     }
+    if (operation === 'probe-ad-unit-experiments') return probeAdUnitExperiments(ctx);
+    if (operation === 'list-ad-unit-experiments') return listAdUnitExperiments(input, ctx);
+    if (operation === 'create-ad-unit-experiment') return createAdUnitExperiment(input, ctx);
+    if (operation === 'promote-ad-unit-experiment') return promoteAdUnitExperiment(input, ctx);
+    if (operation === 'deprecate-ad-unit-experiment') return deprecateAdUnitExperiment(input, ctx);
     if (operation === 'create-ad-unit') return createAdUnit(input, ctx);
     if (operation === 'update-ad-unit') return updateAdUnit(input, ctx);
     throw new AppError('UNSUPPORTED_OPERATION', 'AppLovin MAX에서 지원하지 않는 작업입니다. 캠페인 작업은 applovin-ads 연결을 사용하세요.');

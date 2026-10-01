@@ -71,7 +71,7 @@ export interface TimelineEvent {
 }
 export interface ExternalResource {
   id: string; connectionId: string; projectId: string | null; provider: Provider;
-  kind: 'campaign' | 'product' | 'ad-unit' | 'release' | 'creative' | 'post' | 'reply' | 'mention' | 'news'; externalId: string;
+  kind: 'campaign' | 'product' | 'ad-unit' | 'release' | 'creative' | 'post' | 'reply' | 'mention' | 'news' | 'experiment'; externalId: string;
   name: string; status: string; data: Record<string, unknown>; updatedAt: string;
 }
 export interface MetricFact {
@@ -92,7 +92,7 @@ export interface AppState {
   capabilities: Capability[]; toolchains: Toolchain[]; resources: ExternalResource[];
   metrics: MetricsSummary[]; vault: { available: boolean; backend: string; reason?: string };
   metricFacts?: MetricFact[];
-  runtime: { version: string; platform: string; dataDirectory: string; startedAt: string; mode?: 'demo' | 'live'; notificationsEnabled?: boolean };
+  runtime: { version: string; platform: string; dataDirectory: string; startedAt: string; mode?: 'demo' | 'live'; notificationsEnabled?: boolean; deviceTransferredAt?: string };
 }
 export interface ReleasePipeline {
   restoredPaused?: boolean;

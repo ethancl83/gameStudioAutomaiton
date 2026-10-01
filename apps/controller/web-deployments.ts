@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, mkdir, copyFile, lstat, readdir, realpath, writeFile } from 'node:fs/promises';
 import { join, dirname, relative, isAbsolute } from 'node:path';
-import type { AppService } from './service.js';
+import type { WebDeploymentHooks } from './contracts.js';
 import type { StudioTerminals } from '../../packages/development/terminal.js';
 import type { WebDeployment } from '../../packages/development/types.js';
 import { requireTool, command, quote } from '../../packages/development/process.js';
@@ -13,11 +13,15 @@ type Provider = 'netlify' | 'vercel';
 export interface WebDeploymentOptions { requireTool?: typeof requireTool; command?: typeof command; fetch?: typeof fetch }
 export class WebDeployments {
   private active = new Set<Promise<unknown>>();
-  constructor(private service: AppService, private terminals: StudioTerminals, private options: WebDeploymentOptions = {}) {}
+  private preparing = new Set<string>();
+  private executing = new Set<string>();
+  private tokens = new Map<string, string>();
+  constructor(private service: WebDeploymentHooks, private terminals: StudioTerminals, private options: WebDeploymentOptions = {}) {}
   private tool(provider: Provider) { return (this.options.requireTool ?? requireTool)(provider); }
-  get busy() { return this.active.size > 0; }
+  get busy() { return this.active.size > 0 || this.preparing.size > 0; }
+  activeForProject(id: string): boolean { return this.preparing.has(id) || this.executing.has(id); }
   list() { return this.service.store.list<WebDeployment>('web-deployment').sort((a,b) => b.createdAt.localeCompare(a.createdAt)); }
-  private save(value: WebDeployment) { this.service.store.put('web-deployment', value.id, value); return value; }
+  private save(value: WebDeployment) { this.service.store.putDocument('web-deployment', value.id, value); return value; }
   private project(id: string) {
     const project = this.service.project(id);
     if (project.relinkRequired) throw new AppError('PROJECT_RELINK_REQUIRED', '프로젝트 폴더를 다시 연결하세요.');
@@ -48,8 +52,14 @@ export class WebDeployments {
     return this.terminals.open(`${provider} 프로젝트 연결`, this.project(projectId).rootPath, await this.tool(provider), ['link']);
   }
   async deploy(projectId: string, provider: Provider, production: boolean, expectedHead: string) {
+    if (this.activeForProject(projectId)) throw new AppError('DEPLOY_UNRESOLVED', '이전 배포 결과를 먼저 확인하세요.', 409);
+    this.preparing.add(projectId);
+    try { return await this.prepareDeployment(projectId, provider, production, expectedHead); }
+    finally { this.preparing.delete(projectId); }
+  }
+  private async prepareDeployment(projectId: string, provider: Provider, production: boolean, expectedHead: string) {
     const project = this.project(projectId);
-    if (this.list().some(d => d.projectId === projectId && (d.status === 'running' || (d.status === 'action_required' && !d.resolved))))
+    if (this.service.store.hasUnresolvedDeployment(projectId) || this.service.store.unresolvedEffects({ projectId }).some(run => run.kind === 'web-deployment'))
       throw new AppError('DEPLOY_UNRESOLVED','이전 배포 결과를 먼저 확인하세요. 중복 배포는 자동 재시도하지 않습니다.');
     const info = await this.inspect(projectId);
     const binding = info.bindings.find(b => b.file.startsWith(`.${provider}/`))?.data;
@@ -72,11 +82,19 @@ export class WebDeployments {
     if (await fingerprint(state.root) !== before) throw new AppError('DEPLOY_CHANGED','배포 준비 중 소스가 변경되었습니다. 다시 확인하세요.');
     if (provider === 'vercel') { await mkdir(join(source,'.vercel'),{recursive:true}); await writeFile(join(source,'.vercel/project.json'),JSON.stringify(binding)); }
     const record: WebDeployment = {id,projectId,provider,production,sourceSha:state.head,status:'running',terminalId:'',message:'커밋한 소스로 배포를 준비합니다.',createdAt:new Date().toISOString()};
-    this.save(record);
+    // Recheck after snapshot I/O. A removed project or newly reserved deployment
+    // cannot slip between this synchronous gate and the ledger transaction.
+    this.project(projectId);
+    this.service.store.transaction(() => {
+      const claimed = this.service.store.reserveDeployment(projectId, id);
+      this.save(record); this.tokens.set(id, claimed.token);
+    });
+    this.executing.add(projectId);
     const operation = this.execute(record,directory,source,info,binding).catch(error => {
       const current = this.list().find(d=>d.id===id)!;
-      this.save({...current,status:current.dispatched?'action_required':'failed',message:redact(error instanceof Error?error.message:String(error))});
-    }).finally(()=>this.active.delete(operation));
+      const run = this.service.store.deploymentRun(id);
+      this.settle({...current,status:['dispatched','action_required'].includes(this.service.store.effectState(run?.id ?? '') ?? '')?'action_required':'failed',message:redact(error instanceof Error?error.message:String(error))});
+    }).finally(()=>{ this.active.delete(operation); this.executing.delete(projectId); this.tokens.delete(id); });
     this.active.add(operation);
     await Promise.race([operation,new Promise(resolve=>setTimeout(resolve,200))]);
     return this.list().find(d=>d.id===id)!;
@@ -107,6 +125,11 @@ export class WebDeployments {
     const resultFile=join(directory,'result.txt');
     // Provider progress remains on stderr; stdout is captured byte-for-byte for reconciliation.
     const line=`${[file,...args].map(quote).join(' ')} > ${quote(resultFile)}; code=$?; cat ${quote(resultFile)}; exit "$code"`;
+    this.service.store.transaction(() => {
+      const run = this.service.store.deploymentRun(record.id)!;
+      this.service.store.markDispatched(run.id, this.tokens.get(record.id)!);
+      this.save({...record,dispatched:true,message:'배포 서비스에 전송을 시작합니다.'});
+    });
     const session=await this.terminals.open(`${record.provider} ${record.production?'Production':'Preview'} 배포`,cwd,'/bin/sh',['-c',line],cleanEnvironment());
     this.save({...record,terminalId:session.id,dispatched:true,message:'배포 서비스에서 처리 중입니다.'});
     const code=await this.terminals.wait(session.id);
@@ -132,13 +155,29 @@ export class WebDeployments {
       else url=result.trim().split(/\s+/).find(value=>/^https:\/\/[a-zA-Z0-9.-]+\.vercel\.app\/?$/.test(value));
     }
     if(!url || !/^https:\/\/[a-zA-Z0-9.-]+\.(?:netlify|vercel)\.app\/?$/.test(url))throw new AppError('DEPLOY_UNCONFIRMED','배포 URL을 확인하지 못했습니다. 서비스 이력을 확인하세요.');
-    this.save({...record,url,deploymentId,status:'action_required',message:'배포 완료 상태를 조회합니다.'});
     const data=JSON.parse(record.provider==='netlify' ? await (this.options.command ?? command)(file,['api','getDeploy','--data',JSON.stringify({deploy_id:deploymentId})]) : await (this.options.command ?? command)(file,['api',`/v13/deployments/${new URL(url).hostname}`]));
     const ready=record.provider==='netlify'?data.state==='ready':data.readyState==='READY';
     const http=ready?await (this.options.fetch ?? fetch)(url,{method:'GET',redirect:'manual',signal:AbortSignal.timeout(15000)}):null;await http?.body?.cancel();
-    return this.save({...record,url,deploymentId:deploymentId??data.id,status:ready&&http?.ok?'succeeded':'action_required',message:ready&&http?.ok?'공급자 완료 상태와 사이트 응답을 확인했습니다.':ready?'배포는 완료됐지만 접근 보호·리디렉션 등으로 페이지 확인이 필요합니다.':`서비스 처리 상태: ${data.state??data.readyState??'확인 필요'}`});
+    // Query results may arrive after an operator resolved the uncertainty.
+    // Never overwrite that durable decision with the snapshot read before I/O.
+    const current = this.service.store.get<WebDeployment>('web-deployment', id);
+    if (!current) throw new AppError('NOT_FOUND','배포를 찾을 수 없습니다.',404);
+    if (current.resolved) return current;
+    return this.settle({...current,url,deploymentId:deploymentId??data.id,status:ready&&http?.ok?'succeeded':'action_required',message:ready&&http?.ok?'공급자 완료 상태와 사이트 응답을 확인했습니다.':ready?'배포는 완료됐지만 접근 보호·리디렉션 등으로 페이지 확인이 필요합니다.':`서비스 처리 상태: ${data.state??data.readyState??'확인 필요'}`});
   }
-  resolve(id:string){const record=this.list().find(d=>d.id===id);if(!record)throw new AppError('NOT_FOUND','배포를 찾을 수 없습니다.',404);if(record.status==='running')throw new AppError('BUSY','진행 중인 배포입니다.');return this.save({...record,resolved:true,message:record.message+' 사용자가 서비스에서 확인하고 재배포 잠금을 해제했습니다.'});}
-  recover(){for(const d of this.list())if(d.status==='running')this.save({...d,status:'action_required',message:'이전 실행이 중단되었습니다. 결과 확인으로 서비스 상태를 조회하세요.'});}
+  resolve(id:string){const record=this.list().find(d=>d.id===id);if(!record)throw new AppError('NOT_FOUND','배포를 찾을 수 없습니다.',404);if(record.status==='running'||this.executing.has(record.projectId))throw new AppError('BUSY','진행 중인 배포입니다.');return this.settle({...record,resolved:true,message:record.message+' 사용자가 서비스에서 확인하고 재배포 잠금을 해제했습니다.'});}
+  private settle(record: WebDeployment): WebDeployment {
+    return this.service.store.transaction(() => {
+      const run = this.service.store.deploymentRun(record.id);
+      if (run) {
+        const status = record.status === 'succeeded' ? 'succeeded' : record.resolved || record.status === 'failed' ? 'failed' : 'action_required';
+        const result = { deploymentId: record.id, url: record.url ?? null, operatorConfirmed: record.resolved === true };
+        if (run.status === 'running') this.service.store.finish(run.id, this.tokens.get(record.id)!, status, result, null, record.resolved === true);
+        else if (['action_required','waiting_external'].includes(run.status)) this.service.store.reconcile(run.id, run.updatedAt, status, result);
+      }
+      return this.save(record);
+    });
+  }
+  recover(){for(const d of this.list())if(d.status==='running')this.settle({...d,status:'action_required',message:'이전 실행이 중단되었습니다. 결과 확인으로 서비스 상태를 조회하세요.'});}
   async close(){await Promise.allSettled([...this.active]);}
 }

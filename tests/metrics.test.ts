@@ -19,3 +19,16 @@ test('overlapping MAX and AdMob totals are not double counted and uncertain cove
     { ...base, id: '3', connectionId: 'admob', provider: 'admob', appIdentifier: 'com.example.other', sourceId: 'admob-other', amountMicros: '1000000' }]);
   assert.equal(summaries[0].revenueMicros, '11000000'); assert.equal(summaries[0].warnings?.length, 1);
 });
+
+test('Apple settled finance reports replace daily sales proceeds for the same account, currency and period', () => {
+  const base = { connectionId: 'apple', projectId: null, provider: 'app-store' as const, kind: 'revenue' as const, collectedAt: '' };
+  const facts = [
+    { ...base, id: 'd1', date: '2026-08-10', currency: 'USD', amountMicros: '1000000', basis: 'proceeds' as const, sourceId: 'apple:sales:v:2026-08-10:USD' },
+    { ...base, id: 'd2', date: '2026-09-02', currency: 'USD', amountMicros: '2000000', basis: 'proceeds' as const, sourceId: 'apple:sales:v:2026-09-02:USD' },
+    { ...base, id: 'k1', date: '2026-08-10', currency: 'KRW', amountMicros: '5000000', basis: 'proceeds' as const, sourceId: 'apple:sales:v:2026-08-10:KRW' },
+    { ...base, id: 's1', date: '2026-08-30', currency: 'USD', amountMicros: '900000', basis: 'settled' as const, sourceId: 'apple-finance:v:2026-08:2026-08-01_2026-08-30' },
+  ];
+  const summary = summarizeMetrics(facts);
+  assert.equal(summary.find(item => item.currency === 'USD')!.revenueMicros, '2900000', 'settled August replaces the August daily proceeds only');
+  assert.equal(summary.find(item => item.currency === 'KRW')!.revenueMicros, '5000000');
+});

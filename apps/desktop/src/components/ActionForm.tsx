@@ -48,6 +48,9 @@ export function ActionForm({
   const [importedArtifactId,setImportedArtifactId]=useState('');
   const [artifactTarget,setArtifactTarget]=useState(connection.provider==='google-play'?'android':connection.provider==='app-store'?'ios':'windows');
   const [mediaAssetId, setMediaAssetId] = useState('');
+  // 등록 미디어를 쓰는 작업. 필수 작업은 선택 전 제출할 수 없고, 선택 작업은 비워 두면 텍스트만 보낸다.
+  const mediaMode: 'image' | 'video' | 'optional' | null = operation === 'upload-listing-image' ? 'image' : operation === 'upload-app-preview' ? 'video'
+    : (connection.provider === 'x' && ['create-post', 'reply'].includes(operation)) || ['create-creative', 'update-creative'].includes(operation) ? 'optional' : null;
 
   const project = projectId ? state.projects.find((p) => p.id === projectId) ?? null : null;
   // 공급자·작업별 필드 재정의(컨트롤러가 capability.operationFields로 전달)를 공통 스키마 위에 병합한다.
@@ -57,7 +60,7 @@ export function ActionForm({
   // 조건부 필드(showIf)는 현재 값에 따라 표시/전송한다. 숨겨진 필드는 필수검사·전송에서 제외.
   // externalId는 대상 선택기가 공급하므로 입력 필드로 렌더링하지 않는다(중복 방지).
   const hasMoneyFields = fields.some(field => field.type === 'money');
-  const visibleFields = fields.filter((f) => f.key !== 'externalId' && !(hasMoneyFields && f.key === 'currency') && (!f.showIf || f.showIf(values)));
+  const visibleFields = fields.filter((f) => f.key !== 'externalId' && !(mediaMode && f.key === 'mediaAssetId') && !(hasMoneyFields && f.key === 'currency') && (!f.showIf || f.showIf(values)));
   const hasMoney = visibleFields.some((f) => f.type === 'money');
   const defaultCurrency = project?.policy.currency ?? 'USD';
   const [currency, setCurrency] = useState(defaultCurrency);
@@ -123,7 +126,7 @@ export function ActionForm({
     (!!spec.targetKind && !externalId) ||
     // upload-build: 검증된 빌드 산출물(buildRunId)을 반드시 선택한다(임의 경로 불가).
     (operation === 'upload-build' && !buildRunId && !importedArtifactId) ||
-    (operation === 'upload-listing-image' && !mediaAssetId);
+    ((mediaMode === 'image' || mediaMode === 'video') && !mediaAssetId);
 
   const blocked = !!policyBlock || !!budgetError || missingRequired;
 
@@ -271,7 +274,7 @@ export function ActionForm({
               </>
             )}
 
-            {operation === 'upload-listing-image' && projectId && <MediaPicker key={projectId} projectId={projectId} assets={state.mediaAssets ?? []} value={mediaAssetId} onChange={setMediaAssetId} refresh={refresh} />}
+            {mediaMode && projectId && <MediaPicker key={projectId} projectId={projectId} assets={state.mediaAssets ?? []} value={mediaAssetId} onChange={setMediaAssetId} refresh={refresh} kind={mediaMode === 'image' ? 'image' : mediaMode === 'video' ? 'video' : 'any'} required={mediaMode !== 'optional'} />}
 
             {visibleFields.map((f) => (
               <ActionFieldInput key={f.key} field={f} value={values[f.key] ?? ''} onChange={(v) => setField(f.key, v)} currency={currency} />

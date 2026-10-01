@@ -417,3 +417,67 @@ test('Google Play OAuth resolves Google identity and requests only the extra Ope
   subject = 'different-user';
   await assert.rejects(controller.service.completeOAuth(new URL(again.authorizationUrl).searchParams.get('state')!, 'code'), { code: 'ACCOUNT_MISMATCH' });
 });
+test('re-collected attribution facts keep correction lineage instead of silently overwriting', async t => {
+  let spend = '1000';
+  const fact = () => ({ kind: 'spend' as const, currency: 'USD', amountMicros: spend, eventDate: '2026-09-10', acquisitionDate: '2026-09-10', campaignId: 'c1', observedAt: '2026-09-11T00:00:00Z', sourceId: 'gads:c1:2026-09-10:spend', sourceWatermark: '2026-09-10', revision: 1, finality: 'estimated' as const, appIdentifier: 'com.example.fixture' });
+  const connector: Connector = { capability, async execute() { return { summary: {}, attribution: [fact()] }; } };
+  const { api, controller, projectPath } = await setup(t, connector);
+  unwrap((await api<Project>('/projects', 'POST', { path: projectPath })).value);
+  const connection = unwrap((await api<Connection>('/connections', 'POST', { provider: 'google-ads', label: '광고', accountId: '123', credentials })).value);
+  const sync = async () => {
+    const run = unwrap((await api<Run>('/connections/' + connection.id + '/actions', 'POST', { operation: 'sync', input: {} })).value);
+    for (let i = 0; i < 200 && controller.service.store.getRun(run.id)?.status !== 'succeeded'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  };
+  await sync(); await sync();
+  assert.equal(controller.service.store.list('attribution-fact').length, 1, 'identical re-collection is not duplicated');
+  spend = '1500'; await sync();
+  const facts = controller.service.store.list<{ id: string; revision: number; supersedes?: string; amountMicros: string }>('attribution-fact').sort((a, b) => a.revision - b.revision);
+  assert.deepEqual(facts.map(item => [item.revision, item.amountMicros]), [[1, '1000'], [2, '1500']]);
+  assert.equal(facts[1]!.supersedes, facts[0]!.id);
+});
+
+test('project/connection deletion sees unresolved effects behind 100001 newer runs and after await', async t => {
+  const { controller, api, projectPath } = await setup(t, { capability, execute: async () => ({ summary: {} }) });
+  const service = controller.service; const store = service.store;
+  const project = unwrap((await api<Project>('/projects', 'POST', { path: projectPath })).value);
+  const connection = unwrap((await api<Connection>('/connections', 'POST', { provider: 'google-ads', label: 'Ads', accountId: '1234567890', credentials })).value);
+  const old = store.createRun({ projectId: project.id, connectionId: connection.id, kind: 'create-campaign', label: 'old effect', input: {}, writeEffect: true, idempotencyKey: 'old-effect-fixture' });
+  const claim = store.claim()!; store.markDispatched(old.id, claim.token);
+  store.db.prepare("UPDATE runs SET status='failed' WHERE id=?").run(old.id);
+  store.db.exec(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<100001)
+    INSERT INTO runs(id,kind,label,status,input_json,input_hash,created_at,updated_at,lock_key)
+    SELECT 'later-'||i,'read','later','succeeded','{}','hash','2099-01-01','2099-01-01','later' FROM n`);
+  await assert.rejects(service.removeProject(project.id), { code: 'UNRESOLVED_EXTERNAL_EFFECT' });
+  await assert.rejects(service.removeConnection(connection.id), { code: 'UNRESOLVED_EXTERNAL_EFFECT' });
+  store.db.prepare("UPDATE effects SET state='confirmed' WHERE run_id=?").run(old.id);
+  const removeAgent = service.agent.remove.bind(service.agent);
+  service.agent.remove = async id => { await removeAgent(id); store.db.prepare("UPDATE effects SET state='dispatched' WHERE run_id=?").run(old.id); };
+  await assert.rejects(service.removeProject(project.id), { code: 'UNRESOLVED_EXTERNAL_EFFECT' });
+  assert.ok(store.get('project', project.id));
+});
+
+test('legacy uncertain web deployment blocks project deletion without a connector connection', async t => {
+  const { controller, api, projectPath } = await setup(t);
+  const project = unwrap((await api<Project>('/projects', 'POST', { path: projectPath })).value);
+  controller.service.store.put('web-deployment', 'legacy', { id: 'legacy', projectId: project.id, status: 'uncertain', resolved: false });
+  await assert.rejects(controller.service.removeProject(project.id), { code: 'DEPLOY_UNRESOLVED' });
+  assert.ok(controller.service.store.get('project', project.id));
+});
+
+test('Ads account retargeting rechecks queued work after vault I/O and blocks reservation during commit', async t => {
+  const { api, controller, vault } = await setup(t, { capability, execute: async () => ({ summary: {} }) });
+  const connection = unwrap((await api<Connection>('/connections', 'POST', { provider: 'google-ads', label: 'Legacy', accountId: '1234567890', credentials })).value);
+  const store = controller.service.store;
+  store.put('connection', connection.id, { ...connection, accountId: 'legacy-name' });
+  const get = vault.get.bind(vault); let injected = false;
+  vault.get = async id => {
+    const result = await get(id);
+    if (!injected && id === connection.id) { injected = true; store.createRun({ connectionId: id, kind: 'sync', label: 'raced', input: {} }); }
+    return result;
+  };
+  await assert.rejects(controller.service.updateCredentials(connection.id, { accountId: '9876543210', credentials: {} }), { code: 'CONNECTION_BUSY' });
+  assert.equal(store.get<Connection>('connection', connection.id)?.accountId, 'legacy-name');
+  store.put('connection-commit', connection.id, { connection: { ...connection, accountId: '9876543210' } });
+  assert.throws(() => controller.service.action(connection.id, { operation: 'sync', input: {} }), { code: 'CONNECTION_BUSY' });
+  store.remove('connection-commit', connection.id);
+});

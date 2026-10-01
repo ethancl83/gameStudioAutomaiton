@@ -9,9 +9,9 @@ import { TOOL_CATALOG } from '../../packages/setup/catalog.js';
 import { ToolInstaller } from '../../packages/setup/installer.js';
 import { evaluatePreparation, storeForTarget } from '../../packages/setup/readiness.js';
 import type { PreparationPreferences, PreparationState, ToolId, ToolInstall, ToolSettings } from '../../packages/setup/types.js';
-import { probeIsolation } from '../runner/sandbox.js';
+import { probeIsolation } from '../../packages/runner/sandbox.js';
 import { targetValue, within } from './validation.js';
-import type { AppService } from './service.js';
+import type { PreparationHooks } from './contracts.js';
 import { createBuildPlan } from '../../packages/engines/index.js';
 
 const settingKeys = new Set(['godot','godotData','javaHome','androidSdk','gradleCache','unity','unreal','xcode','steamcmd']);
@@ -23,7 +23,7 @@ export class Preparation {
   readonly installer: ToolInstaller;
   private readonly demoJobs: ToolInstall[];
   private mutation: Promise<unknown> = Promise.resolve();
-  constructor(private readonly store: Store, private readonly service: AppService, private readonly mode: 'demo'|'live') {
+  constructor(private readonly store: Store, private readonly service: PreparationHooks, private readonly mode: 'demo'|'live') {
     this.demoJobs = store.get<ToolInstall[]>('settings','demo-tool-installations') ?? [];
     this.installer = new ToolInstaller({ root: store.directory + '.tools', getSettings: () => this.settings(),
       saveSettings: async settings => { await this.saveTools(settings); },

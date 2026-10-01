@@ -55,7 +55,7 @@ export const APPLE_SCREENSHOT_DISPLAY_TYPES = Object.keys(DISPLAY_SIZES);
 
 type UploadOperation = AppleUploadOperation;
 
-interface MediaState { state: string; confirmed: boolean; failed: boolean; errors: Array<{ code: string; description: string }> }
+export interface MediaState { state: string; confirmed: boolean; failed: boolean; errors: Array<{ code: string; description: string }> }
 
 function displayType(input: Record<string, unknown>): string {
   const raw = text(input.screenshotDisplayType ?? input.imageType, '스크린샷 표시 유형', 60).toUpperCase().replace(/-/g, '_');
@@ -93,8 +93,8 @@ function assertDisplaySize(type: string, width: number, height: number): void {
 }
 
 
-function parseMediaState(resource: JsonApiResource): MediaState {
-  const raw = attribute(resource, 'assetDeliveryState');
+export function parseMediaState(resource: JsonApiResource, field = 'assetDeliveryState'): MediaState {
+  const raw = attribute(resource, field);
   const object = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   const state = typeof object.state === 'string' && object.state !== '' ? object.state : 'UNKNOWN';
   const errors: Array<{ code: string; description: string }> = [];
@@ -116,7 +116,7 @@ async function readScreenshot(context: ConnectorContext, id: string, headers: Re
   );
 }
 
-async function findLocalization(
+export async function findLocalization(
   context: ConnectorContext,
   versionId: string,
   selectedLocale: string,
@@ -239,7 +239,7 @@ async function putParts(
 
 export async function uploadAppleScreenshot(input: Record<string, unknown>, context: ConnectorContext): Promise<ConnectorResult> {
   if (input.previewType !== undefined || input.appPreviewSetId !== undefined) {
-    throw new AppError('UNSUPPORTED_OPERATION', 'App Store 미리보기 동영상(appPreviews)은 이 범위에서 지원하지 않습니다. 스크린샷만 업로드할 수 있습니다.');
+    throw new AppError('UNSUPPORTED_OPERATION', 'App Store 미리보기 동영상은 upload-listing-image가 아니라 upload-app-preview 작업으로 올려 주세요.');
   }
   const versionId = resourceId(input.appStoreVersionId, '앱 스토어 버전 ID');
   const selectedLocale = locale(input.locale);

@@ -3,7 +3,7 @@
 // 어댑터 계약을 따르며, 서버가 다른 키를 요구하면 이 스키마를 갱신한다.
 
 import type { OperationField, Provider } from '../../../packages/domain';
-import { isWriteOperation } from '../../../packages/connectors/types';
+import { isWriteOperation } from '../../../packages/domain/operations';
 import { majorToMicros, operationLabel } from './format';
 
 export type OpFieldType = 'text' | 'money' | 'select' | 'textarea' | 'date';
@@ -202,6 +202,7 @@ export function specFor(op: string, provider?: Provider): OpSpec {
   if (['create-app','prepare-news','create-announcement'].includes(op)) return { description: '플랫폼에서 필요한 등록·게시 절차와 연결 상태를 확인합니다.', externalWrite: false, needsProject: 'required', fields: [] };
   if (op === 'create-creative') return { description: '선택한 캠페인에 광고 문구와 소재를 등록합니다.', externalWrite: true, needsProject: 'required', targetKind: 'campaign', fields: [] };
   if (['list-listings','list-beta-groups','list-review-submissions'].includes(op)) return { description: '선택한 프로젝트의 스토어 정보를 가져옵니다.', externalWrite: isWriteOperation(op, provider), needsProject: 'required', fields: [] };
+  if (['activate-product','deactivate-product','submit-product'].includes(op)) return { description: op === 'submit-product' ? '선택한 상품·구독을 스토어 심사에 제출합니다.' : '선택한 상품의 판매 상태를 바꿉니다. 옵션이 여러 개면 대상 옵션을 지정합니다.', externalWrite: true, needsProject: 'required', targetKind: 'product', fields: [] };
   if (op === 'sdk-integration-config') return { description: '광고 SDK 연동에 필요한 공개 식별자와 설정을 조회합니다.', externalWrite: false, fields: [] };
   return (
     OPERATION_SPECS[op] ?? {

@@ -1,4 +1,5 @@
 import type { Capability, Connection, ExternalResource, MetricFact, Project } from '../domain/index.js';
+import type { AttributionFact } from '../growth/types.js';
 
 export interface ProviderRequest {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -25,8 +26,11 @@ export interface ConnectorContext {
 }
 export type ResourceInput = Pick<ExternalResource, 'kind' | 'externalId' | 'name' | 'status' | 'data'>;
 export type MetricInput = Pick<MetricFact, 'date' | 'currency' | 'kind' | 'amountMicros' | 'basis' | 'sourceId' | 'appIdentifier'>;
+/** 캠페인·실험 arm·cohort 단위 귀속 fact. 프로젝트·연결·수집 시각은 제어 서비스가 채운다. */
+export type AttributionInput = Omit<AttributionFact, 'id' | 'projectId' | 'provider' | 'connectionId' | 'collectedAt'> & { appIdentifier?: string };
 export interface ConnectorResult {
   summary: Record<string, unknown>;
+  attribution?: AttributionInput[];
   resources?: ResourceInput[];
   metrics?: MetricInput[];
   waitingExternal?: boolean;
@@ -42,10 +46,4 @@ export interface Connector {
   execute(operation: string, input: Record<string, unknown>, context: ConnectorContext): Promise<ConnectorResult>;
 }
 
-export function isWriteOperation(operation: string, provider?: Connection['provider']): boolean {
-  if (operation === 'sync-app') return false;
-  // Play listing reads create a temporary edit; Apple's JSON API only performs GETs.
-  if (operation === 'list-listings' && provider === 'app-store') return false;
-  if (['create-app', 'prepare-news', 'create-announcement'].includes(operation)) return false;
-  return !['check', 'sync', 'list-apps', 'list-campaigns', 'list-products', 'list-ad-units', 'list-releases', 'reconcile', 'list-posts', 'list-mentions', 'list-replies', 'list-news', 'list-beta-groups', 'list-review-submissions', 'sdk-integration-config'].includes(operation);
-}
+export { isWriteOperation } from '../domain/operations.js';

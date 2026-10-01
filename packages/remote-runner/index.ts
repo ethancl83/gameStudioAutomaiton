@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { chmod, lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { AppError, object, text } from '../domain/errors.js';
-import { isSecretFile } from '../../apps/runner/secrets.js';
-import { isExcludedDirectory } from '../../apps/runner/excludes.js';
+import { isSecretFile } from '../runner/secrets.js';
+import { isExcludedDirectory } from '../runner/excludes.js';
 
 export const MAX_BUNDLE_BYTES=256*1024*1024;
 export interface BundleFile { path:string; data:string; executable:boolean; sha256:string }

@@ -1,7 +1,7 @@
 import { useCallback, useContext, useEffect, useId, useRef, useState } from 'react';
 import { Bot, ExternalLink, FolderPlus, Pause, Send, Eraser, RefreshCw } from 'lucide-react';
 import { api } from '../api';
-import { Card, Field, Notice, Spinner } from './ui';
+import { Badge, Card, Field, Notice, Spinner } from './ui';
 import type { AppState } from '../../../../packages/domain';
 import type { AgentImage, AgentRequestContext, AgentSettings, AgentState, AgentTask } from '../../../../packages/agent/types';
 import { SCREEN_REQUESTS } from '../../../../packages/agent/requests';
@@ -53,7 +53,7 @@ export function AgentPanel({ state, projectId, requestContext, onRegister }: { s
   return <Card title={`${project?.name ?? '전체 운영'} · AI 대화`} icon={Bot}>
     <div className="agent-chat">
       <p className="muted agent-chat__intro">원하는 요청을 작성한 뒤 전송하세요. 클리어 전까지 같은 대화를 이어갑니다.</p>
-      {requestContext && <p className="small muted" style={{ margin: 0 }}>현재 화면: {SCREEN_REQUESTS[context.screen].label} · 대상: {project?.name ?? '전체 운영'}{context.connectionId && ` · 계정: ${state.connections.find(conn => conn.id === context.connectionId)?.label ?? '선택한 계정'}`}</p>}
+      {requestContext && <p className="small muted" style={{ margin: 0 }}>현재 화면: {SCREEN_REQUESTS[context.screen].label} · 대상: {project?.name ?? '전체 운영'}{context.connectionId && ` · 계정: ${state.connections.find(conn => conn.id === context.connectionId)?.label ?? '선택한 계정'}`}{context.selection && ` · 선택: ${context.selection.label}`}</p>}
       <div className="agent-chat__controls">
         {projectId === undefined && <Field label="대화 대상" htmlFor={`${controlId}-project`}>
           <select id={`${controlId}-project`} className="select" value={activeId} onChange={event => setSelectedId(event.target.value)} disabled={pending}>
@@ -66,14 +66,16 @@ export function AgentPanel({ state, projectId, requestContext, onRegister }: { s
               disabled={!agent || pending || !!task?.provider} aria-pressed={(task?.provider ?? agent?.settings.provider ?? 'auto') === id} onClick={() => void providerChanged(id)}><Bot size={15} aria-hidden />{label}</button>)}
           </div>
         </Field>
-        <button className="btn btn--sm" disabled={pending || !task} onClick={() => void action('clear')} title="진행 중인 AI를 중지하고 대화를 비웁니다. 결과물과 작업 이력은 보존됩니다."><Eraser size={14} />클리어</button>
+        <button className="btn btn--sm" disabled={pending || !task} onClick={() => void action('clear')} title="진행 중인 AI를 중지하고 대화를 비웁니다. 결과물과 작업 이력은 보존됩니다. 확정한 성장 운영 위임은 멈추지 않습니다."><Eraser size={14} />클리어</button>
         {onRegister && <button className="btn btn--sm" onClick={onRegister}><FolderPlus size={14} />프로젝트 등록</button>}
       </div>
+      <p className="small muted" style={{ margin: 0 }}>클리어는 대화만 비웁니다. 확정한 성장 운영 위임(주기 작업)은 계속 실행되므로, 멈추려면 성장 운영 화면에서 위임을 직접 중지하세요.{task?.clearedSessions?.length ? ` · 이전에 클리어한 CLI 세션 ${task.clearedSessions.length}개는 다시 이어 쓰지 않습니다.` : ''}</p>
       {api.isDemo() ? <Notice tone="info">데모에서는 실제 AI를 실행하지 않습니다.</Notice> : agent && !agent.runtimes.some(runtime => runtime.executable) && <Notice tone="warn">Codex 또는 OpenCode CLI 설치·로그인이 필요합니다.</Notice>}
       <div className="agent-chat__messages" role="log" aria-label="AI 대화" aria-live="polite">
         {!task?.conversation.length && <div className="agent-chat__empty"><Bot size={28} /><p>어떤 작업을 도와드릴까요?</p><span>원하는 요청을 작성해 주세요.</span></div>}
         {task?.conversation.map((entry, index) => <div key={`${task.sessionGeneration}-${index}`} className={`agent-message agent-message--${entry.role}`}>
-          <strong>{entry.role === 'user' ? '나' : task.provider === 'opencode' ? 'OpenCode' : 'AI'}{entry.context && ` · ${SCREEN_REQUESTS[entry.context.screen].label}`}{entry.context?.connectionId && ` · ${state.connections.find(conn => conn.id === entry.context?.connectionId)?.label ?? '선택한 계정'}`}</strong><div>{entry.text}</div>
+          <strong>{entry.role === 'user' ? '나' : task.provider === 'opencode' ? 'OpenCode' : 'AI'}{entry.context && ` · ${SCREEN_REQUESTS[entry.context.screen]?.label ?? entry.context.screen}`}{entry.context?.connectionId && ` · ${state.connections.find(conn => conn.id === entry.context?.connectionId)?.label ?? '선택한 계정'}`}{entry.context?.selection && ` · 선택: ${entry.context.selection.label}`}</strong>
+          {entry.context?.stale && <span title={entry.context.staleReason}><Badge tone="warn">오래된 선택{entry.context.staleReason ? ` — ${entry.context.staleReason}` : ''}</Badge></span>}<div>{entry.text}</div>
         </div>)}
         <div ref={bottom} />
       </div>

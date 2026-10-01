@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import type { BackupRecord, OperationsSettings, OperationsState, Project, ReadinessCheck, RunnerRegistration } from '../../packages/domain/index.js';
 import { AppError, object, prohibitSecrets, text } from '../../packages/domain/errors.js';
 import type { Store } from '../../packages/storage/index.js';
-import type { AppService } from './service.js';
+import type { OperationsHooks } from './contracts.js';
 import { policyValue } from './validation.js';
 
 const defaults:OperationsSettings={retentionDays:90,autoBackup:false,backupHour:3,notifications:true};
@@ -15,7 +15,7 @@ interface ConfigurationBackup { schema:1; mode:'demo'|'live'; installation:strin
 export class Operations {
   private timer:ReturnType<typeof setInterval>|undefined;
   private active:Promise<unknown>|undefined;
-  constructor(private store:Store,private service:AppService,private mode:'demo'|'live') {}
+  constructor(private store:Store,private service:OperationsHooks,private mode:'demo'|'live') {}
   start():void { this.timer=setInterval(()=>{void this.cycle();},60_000);this.timer.unref(); }
   async stop():Promise<void> { clearInterval(this.timer);await this.active; }
   private installation():string {
@@ -39,7 +39,7 @@ export class Operations {
     return {settings:this.settings(),runners:[local,...this.store.list<RunnerRegistration>('runner')],backups:await this.backups(),readiness,mode:this.mode};
   }
   private assertIdle():void {
-    if (this.store.runs(100_000).some(r=>['queued','running','retry_wait','waiting_external','action_required'].includes(r.status))||this.service.pipelines.list().some(p=>['building','uploading','action_required'].includes(p.status))) throw new AppError('OPERATIONS_BUSY','진행 중인 작업을 완료하거나 취소한 뒤 설정을 복구해 주세요.',409);
+    if (this.store.hasRuns({ statuses: ['queued','running','retry_wait','waiting_external','action_required'] }) || this.store.unresolvedEffects().length > 0 || this.store.hasUnresolvedDeployment()||this.service.pipelines.list().some(p=>['building','uploading','action_required'].includes(p.status))) throw new AppError('OPERATIONS_BUSY','진행 중인 작업을 완료하거나 취소한 뒤 설정을 복구해 주세요.',409);
   }
   async backup(input:unknown={}):Promise<BackupRecord> {
     const data=object(input);const description=data.description?text(data.description,'백업 설명',200):'프로젝트·정책·운영 설정 백업';
@@ -119,9 +119,11 @@ export class Operations {
     this.store.writeBatch([{kind:'runner',id,value}],[],[{kind:'runner.checked',message:runner.label+' '+(error?'연결 확인 필요':'연결 확인 완료'),level:error?'warning':'info'}]);return value;
   }
   async removeRunner(id:string):Promise<{deleted:true}> {
-    if(this.store.runs(100_000).some(r=>r.input.runnerId===id&&['queued','running','retry_wait'].includes(r.status)))throw new AppError('RUNNER_IN_USE','빌드가 끝난 뒤 러너를 삭제해 주세요.',409);
+    if(this.store.hasRuns({ runnerId: id, statuses: ['queued','running','retry_wait'] }))throw new AppError('RUNNER_IN_USE','빌드가 끝난 뒤 러너를 삭제해 주세요.',409);
     if(!this.store.get('runner',id))throw new AppError('NOT_FOUND','등록한 러너가 없습니다.',404);
-    await this.service.vault.remove('runner-'+id);this.store.remove('runner',id);this.store.addEvent({kind:'runner.removed',message:'원격 러너 등록을 해제했습니다.'});return {deleted:true};
+    await this.service.vault.remove('runner-'+id);
+    if(this.store.hasRuns({ runnerId: id, statuses: ['queued','running','retry_wait'] }))throw new AppError('RUNNER_IN_USE','새 빌드가 예약되어 러너를 삭제하지 않았습니다.',409);
+    this.store.remove('runner',id);this.store.addEvent({kind:'runner.removed',message:'원격 러너 등록을 해제했습니다.'});return {deleted:true};
   }
   async diagnostics():Promise<Record<string,unknown>> {
     const state=await this.service.state();

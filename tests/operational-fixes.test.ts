@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {setTimeout as pause} from 'node:timers/promises';
 import {Store} from '../packages/storage/index.js';
 import {AppService} from '../apps/controller/service.js';
+import {persistResult} from '../apps/controller/results.js';
 import {CredentialVault} from '../packages/credentials/index.js';
 import {DEFAULT_POLICY,type Connection,type ExternalResource,type Project,type ReleaseObservation,type Run} from '../packages/domain/index.js';
 import {xConnector} from '../packages/connectors/social.js';
@@ -73,10 +74,13 @@ test('one Play connection synchronizes both mapped apps, deduplicates ticks and 
   });
   const actions={build:()=>{throw new Error('Must not build');},action:(id:string,input:unknown)=>service.action(id,input),reconcile:(id:string)=>service.reconcile(id),supported:(provider:Connection['provider'],operation:string)=>provider==='google-play'&&['sync','sync-app'].includes(operation)};
   const scheduler=new AutomationScheduler(store,actions);scheduler.start();await scheduler.tick();await scheduler.stop();
+  assert.equal(store.runs().filter(r=>r.kind==='sync').length,0); // Account sync waits for the freshly scheduled app reads.
   for(const run of store.runs())assert.equal((await settle(run.id)).status,'succeeded');
   assert.deepEqual(new Set(paths.filter(path=>path.includes('/applications/')).map(path=>path.split('/applications/')[1].split('/')[0])),new Set(['com.test.a','com.test.b']));
-  assert.equal(store.runs().filter(r=>r.kind==='sync-app').length,2);assert.equal(store.runs().filter(r=>r.kind==='sync').length,1);
+  assert.equal(store.runs().filter(r=>r.kind==='sync-app').length,2);
   const restart=new AutomationScheduler(store,actions);restart.start();await restart.tick();await restart.stop();assert.equal(store.runs().filter(r=>r.kind==='sync-app').length,2);
+  const accountSync=store.runs().filter(r=>r.kind==='sync');assert.equal(accountSync.length,1);assert.equal((await settle(accountSync[0].id)).status,'succeeded');
+  const nextTick=new AutomationScheduler(store,actions);nextTick.start();await nextTick.tick();await nextTick.stop();assert.equal(store.runs().filter(r=>r.kind==='sync').length,1);
   for(const operation of ['list-products','list-releases'])assert.equal(specFor(operation,'google-play').needsProject,'required');
 });
 
@@ -94,7 +98,7 @@ test('complete campaign inventories remove deleted budgets while failed and part
   response='error';assert.equal((await sync()).status,'failed');assert.equal(store.list('resource').length,1);
   const other={...store.list<ExternalResource>('resource')[0],id:'other',projectId:'b',connectionId:'other-ads',data:{...store.list<ExternalResource>('resource')[0].data,appIdentifier:'com.test.b',appId:'com.test.b'}};store.put('resource',other.id,other);
   // A result without the full-inventory marker must leave missing campaigns intact.
-  (service as unknown as {persistResult(run:Run,connection:Connection,result:unknown):void}).persistResult({kind:'list-campaigns',input:{}} as Run,connection('ads','google-ads'),{summary:{},resources:[]});assert.equal(store.list('resource').length,2);
+  store.transaction(()=>persistResult(store,{kind:'list-campaigns',input:{}} as Run,connection('ads','google-ads'),{summary:{},resources:[]}));assert.equal(store.list('resource').length,2);
   response='empty';assert.equal((await sync()).status,'succeeded');assert.deepEqual(store.list<ExternalResource>('resource').map(r=>r.id),['other']);
   service.queue.pause();assert.doesNotThrow(()=>service.action('ads',{operation:'create-campaign',projectId:'a',idempotencyKey:randomUUID(),input:{name:'New',dailyBudgetMicros:'50000000',currency:'USD',targetCpaMicros:'1000000'}}));
 });

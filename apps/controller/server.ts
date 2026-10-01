@@ -161,7 +161,7 @@ export async function startController(options: ControllerOptions = {}): Promise<
       let data: unknown;
       if (inDemo && method === 'POST' && path === '/api/scenario') data = (activeService as DemoService).scenario(body);
       else if (inDemo && method === 'POST' && path === '/api/reset') {
-        if (demoRequests > 1 || activeStore.runs(100_000).some(run => ['queued','running','retry_wait','waiting_external','action_required'].includes(run.status))) throw new AppError('DEMO_BUSY', '진행 중인 데모 작업을 완료하거나 취소한 뒤 초기화해 주세요.', 409);
+        if (demoRequests > 1 || activeStore.hasRuns({ statuses: ['queued','running','retry_wait','waiting_external','action_required'] })) throw new AppError('DEMO_BUSY', '진행 중인 데모 작업을 완료하거나 취소한 뒤 초기화해 주세요.', 409);
         resettingDemo = true;
         try {
           await activeService.stop(); activeStore.close(); demo = undefined;
@@ -182,6 +182,11 @@ export async function startController(options: ControllerOptions = {}): Promise<
         else if (method === 'POST' && path.endsWith('/image')) data = await activeService.agent.imagePreview(id, text(object(body).mediaAssetId, '이미지 ID', 100));
         else throw new AppError('NOT_FOUND', '지원하지 않는 AI 요청입니다.', 404);
       }
+      else if (method === 'POST' && path === '/api/operations/reclaim-device') data = activeService.reclaimDevice(body);
+      else if (method === 'GET' && path === '/api/growth') data = activeService.growth.state();
+      else if (method === 'GET' && /^\/api\/growth\/projects\/[a-zA-Z0-9-]{1,100}$/.test(path)) data = activeService.growth.state(path.split('/')[4]!);
+      else if (method === 'POST' && path === '/api/growth') data = await activeService.growth.action(body);
+      else if (method === 'POST' && path === '/api/growth/decisions/query') data = activeService.growth.decisionPage(body);
       else if (method === 'GET' && path === '/api/setup') data = await activeService.preparation.state();
       else if (/^\/api\/projects\/[a-zA-Z0-9-]{1,100}\/integration(?:\/(preview|apply|rollback))?$/.test(path)) {
         const id=path.split('/')[3]!; const action=path.split('/')[5];

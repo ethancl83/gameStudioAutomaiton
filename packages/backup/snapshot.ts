@@ -115,6 +115,7 @@ function fenceDatabase(path:string,manifest:Manifest,target:string):number{
           db.prepare('INSERT INTO documents(kind,id,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run('settings','restored-'+id,JSON.stringify(parsed),at);
           db.prepare('DELETE FROM documents WHERE kind=? AND id=?').run(kind,id);continue;
         }
+        if(kind==='settings'&&id==='device-transferred'){db.prepare('DELETE FROM documents WHERE kind=? AND id=?').run(kind,id);continue;}
         if(kind==='settings'&&Array.isArray(parsed)){
           if(['tool-installations','demo-tool-installations'].includes(id))for(const job of parsed){if(job&&typeof job==='object'&&!['succeeded','failed','cancelled'].includes(job.status)){job.status='failed';job.message='백업 복원으로 설치가 중단되었습니다. 다시 설치해 주세요.';}}
           update.run(JSON.stringify(rebase(parsed,manifest.sourceDirectory,target)),at,kind,id);continue;
@@ -140,6 +141,13 @@ function fenceDatabase(path:string,manifest:Manifest,target:string):number{
           delete value.terminalId;delete value.verifiedFingerprint;delete value.verifiedCommand;
         }else if(kind==='development-gitdir'){
           db.prepare('DELETE FROM documents WHERE kind=? AND id=?').run(kind,id);continue;
+        }else if(kind==='growth-mandate'&&['active','proposed'].includes(String(value.status))){
+          // 복원한 위임은 새 장비·계정에서 다시 확인하기 전까지 외부 효과를 만들지 않는다.
+          value.status='stopped';value.stopReason='백업 복원으로 중지했습니다. 계정·정책을 확인한 뒤 새로 위임해 주세요.';value.stoppedAt=at;
+        }else if(kind==='response-intent'&&['authorized','draft_ready'].includes(String(value.status))){
+          value.status='blocked';value.blockReasons=[...(Array.isArray(value.blockReasons)?value.blockReasons:[]),'백업 복원 후 발송하지 않았습니다.'];
+        }else if(kind==='growth-experiment'&&['scheduled','exploring','observing','evaluating','winner_scaling','validating'].includes(String(value.status))){
+          value.status='action_required';value.statusReason='백업에서 복원한 실험입니다. 공급자 상태를 확인한 뒤 다시 등록해 주세요.';
         }else if(kind==='web-deployment'){
           value.status='action_required';value.resolved=false;value.terminalId='';value.message='복원한 배포입니다. 서비스에서 커밋과 배포 결과를 확인하세요.';
         }else if(kind==='settings'){
@@ -154,6 +162,7 @@ function fenceDatabase(path:string,manifest:Manifest,target:string):number{
       }
       const updateRun=db.prepare('UPDATE runs SET result_json=? WHERE id=?');
       for(const row of db.prepare('SELECT id,result_json FROM runs WHERE result_json IS NOT NULL').iterate())updateRun.run(JSON.stringify(rebase(JSON.parse(String(row.result_json)),manifest.sourceDirectory,target)),String(row.id));
+      db.prepare('INSERT INTO documents(kind,id,payload,updated_at) VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run('settings','growth-paused',JSON.stringify({at,reason:'backup-restore'}),at);
       db.prepare('INSERT INTO events(project_id,run_id,kind,message,level,data_json,created_at) VALUES(NULL,NULL,?,?,?,?,?)')
         .run('backup.restored','전체 백업을 복원했습니다. 프로젝트 경로·계정·러너를 확인할 때까지 자동화를 중지했습니다.','warning',JSON.stringify({sourceCreatedAt:manifest.createdAt,automationsPaused:true}),at);
       db.exec('COMMIT; PRAGMA wal_checkpoint(TRUNCATE);');

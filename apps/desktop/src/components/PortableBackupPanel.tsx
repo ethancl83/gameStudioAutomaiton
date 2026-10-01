@@ -93,22 +93,26 @@ export function PortableBackupPanel({ refresh }: { refresh: () => Promise<void> 
 
   // --- 생성 ---
   const [createPass, setCreatePass] = useState('');
+  const [transfer, setTransfer] = useState(false);
   const doCreate = useCallback(async () => {
     if (!passphraseValid(createPass) || busy) return;
     setBusy('create');
     setNotice(null);
     const pass = createPass;
     setCreatePass(''); // 요청 후 즉시 비운다.
-    const res = await api.createPortableBackup(pass);
+    const res = await api.createPortableBackup(pass, transfer);
     if (!mounted.current) return;
     if (res.ok) {
-      setNotice({ tone: 'ok', text: '전체 백업을 생성하기 시작했습니다. 진행 상태는 아래 목록에서 갱신됩니다.' });
+      setNotice({ tone: 'ok', text: transfer
+        ? '장비 이전용 전체 백업을 생성하기 시작했습니다. 성공하면 이 장비의 자동 빌드·배포·SNS·성장 운영이 중지됩니다.'
+        : '전체 백업을 생성하기 시작했습니다. 진행 상태는 아래 목록에서 갱신됩니다.' });
+      setTransfer(false);
       await load();
     } else {
       setNotice({ tone: 'error', text: res.error.message });
     }
     setBusy(null);
-  }, [createPass, busy, load]);
+  }, [createPass, transfer, busy, load]);
 
   // --- 내보내기(다운로드→디스크) ---
   const doSave = useCallback(
@@ -222,6 +226,15 @@ export function PortableBackupPanel({ refresh }: { refresh: () => Promise<void> 
               placeholder="긴 암호구절을 권장합니다"
             />
           </Field>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={transfer} onChange={(e) => setTransfer(e.target.checked)} disabled={busy !== null} />
+            <span>
+              장비 이전용(성공 후 이 장비 자동화 중지)
+              <span className="small muted" style={{ display: 'block' }}>
+                새 장비로 옮길 때 선택하세요. 백업이 성공하면 이 장비의 자동 빌드·배포·SNS·성장 운영을 멈춰 두 장비가 같은 계정을 동시에 운영하지 않게 합니다.
+              </span>
+            </span>
+          </label>
           <div className="row" style={{ gap: 10, alignItems: 'center' }}>
             <button className="btn btn--primary" onClick={() => void doCreate()} disabled={!createValid || busy !== null}>
               {busy === 'create' ? <Spinner /> : <Archive size={15} />} 전체 백업 생성

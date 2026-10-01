@@ -8,7 +8,7 @@ import { AppError, object, text } from '../../packages/domain/errors.js';
 import { createPortableSnapshot, restorePortableSnapshot } from '../../packages/backup/snapshot.js';
 import { recoveryRoot, readPendingRestore, requestRestoreActivation, restoreStage, stageRestoreActivation } from '../../packages/backup/activation.js';
 import type { PortableBackupRecord, PortableBackupState, PortableRestoreRecord } from '../../packages/backup/types.js';
-import type { AppService } from './service.js';
+import type { PortableBackupHooks } from './contracts.js';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const LIMIT=512*1024**3;
@@ -22,7 +22,7 @@ export class PortableBackups {
   private activeId:string|undefined;
   private stopped=false;
   private abort:AbortController|undefined;
-  constructor(private readonly store:Store,private readonly service:AppService,private readonly mode:'demo'|'live',private readonly vaultFactory?:(directory:string)=>CredentialVault){this.directory=store.directory+'.portable-backups';}
+  constructor(private readonly store:Store,private readonly service:PortableBackupHooks,private readonly mode:'demo'|'live',private readonly vaultFactory?:(directory:string)=>CredentialVault){this.directory=store.directory+'.portable-backups';}
   private id(value:unknown):string{if(typeof value!=='string'||!UUID.test(value))throw new AppError('BACKUP_ID','백업 ID를 확인해 주세요.');return value;}
   private async root():Promise<void>{await mkdir(this.directory,{recursive:true,mode:0o700});if((await lstat(this.directory)).isSymbolicLink()||await realpath(this.directory)!==resolve(this.directory))throw new AppError('BACKUP_PATH','백업 저장소의 실제 경로가 변경되었습니다.');}
   private async save(name:string,value:unknown):Promise<void>{await this.root();const path=join(this.directory,name),temp=path+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value),{mode:0o600,flag:'wx'});try{await rename(temp,path);}finally{await rm(temp,{force:true});}}
@@ -50,6 +50,8 @@ export class PortableBackups {
   }
   async create(input:unknown):Promise<PortableBackupRecord>{
     this.available();const passphrase=password(input),id=randomUUID();
+    // 장비 이전 백업은 성공 직후 이 장비의 자동화를 멈춰 두 장비가 같은 계정으로 동시에 운영하지 않게 한다.
+    const transfer=(input as {transfer?:unknown}|null)?.transfer===true;
     const record:PortableBackupRecord={id,createdAt:at(),updatedAt:at(),status:'creating',size:0,fileCount:0,credentialCount:0,origin:'created'};
     this.activeId=id;const abort=this.abort=new AbortController();
     this.active=this.service.withMaintenance(async()=>{
@@ -60,6 +62,7 @@ export class PortableBackups {
         const digest=await this.digest(path,abort.signal);
         await this.save(id+'.json',{...record,status:'ready',updatedAt:at(),size:info.size,fileCount:result.files,credentialCount:result.credentials,sha256:digest});
         this.store.addEvent({kind:'backup.full.created',message:'이력·산출물·암호화 보관함을 포함한 전체 백업을 만들었습니다.',data:{backupId:id,fileCount:result.files,credentialCount:result.credentials}});
+        if(transfer)this.store.writeBatch([{kind:'settings',id:'device-transferred',value:{at:at(),backupId:id}}],[],[{kind:'device.transferred',level:'warning',message:'장비 이전용 백업을 만들었습니다. 이 장비의 자동 빌드·자동 배포 예약·SNS 예약·성장 운영 주기를 멈췄고, 성장 운영의 예약된 외부 변경은 전송 직전에 막습니다. 이미 예약된 다른 작업과 진행 중인 출시 파이프라인은 이력에서 확인·취소하세요. 계속 이 장비를 쓰려면 운영·복구에서 다시 활성화하세요.',data:{backupId:id}}]);
     }).catch(async error=>{await rm(join(this.directory,id+'.appopsbackup'),{force:true});await this.save(id+'.json',{...record,status:'failed',updatedAt:at(),error:message(error)});}).finally(()=>{this.active=undefined;this.activeId=undefined;this.abort=undefined;});
     // A failure to write the progress index must still be observed by close().
     void this.active.catch(()=>{});

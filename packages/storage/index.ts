@@ -1,3 +1,5 @@
+import { validateDocument, type CoreDocumentKind, type DocumentPayloads } from './documents.js';
+import { documentPageSql, documentWhere, type DocumentFilter, type DocumentPage, type DocumentPageQuery } from './document-query.js';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdirSync, chmodSync, realpathSync } from 'node:fs';
@@ -6,11 +8,18 @@ import { AppError, canonical, prohibitSecrets, redact } from '../domain/errors.j
 import type { Run, RunStatus, TimelineEvent, Severity, HistoryPage, ReleasePipeline } from '../domain/index.js';
 
 type Row = Record<string, unknown>;
-export type DocumentKind = 'project' | 'connection' | 'resource' | 'metric' | 'settings' | 'build-credential' | 'social-schedule' | 'connection-commit' | 'pipeline' | 'runner' | 'media' | 'release-observation' | 'imported-artifact' | 'agent-task' | 'development-task' | 'development-gitdir' | 'web-deployment';
+export type DocumentKind = 'project' | 'connection' | 'resource' | 'metric' | 'settings' | 'build-credential' | 'social-schedule' | 'connection-commit' | 'pipeline' | 'runner' | 'media' | 'release-observation' | 'imported-artifact' | 'agent-task' | 'development-task' | 'development-gitdir' | 'web-deployment'
+  | 'growth-mandate' | 'growth-policy' | 'growth-experiment' | 'growth-decision' | 'attribution-fact' | 'fx-snapshot' | 'knowledge-revision' | 'response-intent' | 'platform-approval' | 'opt-out' | 'growth-incident' | 'feedback-item' | 'issue-cluster' | 'product-link' | 'growth-cycle' | 'growth-capability' | 'pricing-change' | 'growth-run';
+export type { DocumentCursor, DocumentFilter, DocumentPage } from './document-query.js';
+export type RunMutation = (run: Run, reused: boolean) => void;
 export interface RunInput {
   projectId?: string | null; connectionId?: string | null; kind: string; label: string;
   input: Record<string, unknown>; writeEffect?: boolean; idempotencyKey?: string;
   pipeline?: ReleasePipeline;
+}
+export interface RunQuery {
+  projectId?: string; connectionId?: string; statuses?: readonly string[]; kinds?: readonly string[];
+  targetRunId?: string; runnerId?: string; pipelineId?: string; input?: Record<string, unknown>; updatedSince?: string; finishedSince?: string;
 }
 export interface ClaimedRun { run: Run; token: string }
 
@@ -29,6 +38,8 @@ export class Store {
   readonly owner = randomUUID();
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private closed = false;
+  private transactionDepth = 0;
+  private committed: Array<() => void> = [];
   private readonly clock: () => number;
   private readonly leaseDuration = 60_000;
 
@@ -39,6 +50,11 @@ export class Store {
     chmodSync(directory, 0o700);
     this.db = new DatabaseSync(join(directory, 'operations.sqlite'));
     chmodSync(join(directory, 'operations.sqlite'), 0o600);
+    const version = Number((this.db.prepare('PRAGMA user_version').get() as Row).user_version);
+    if (version > 1) {
+      this.db.close();
+      throw new AppError('UNSUPPORTED_DATABASE_VERSION', '더 새로운 앱에서 만든 저장소입니다. 앱을 업데이트해 주세요.', 409);
+    }
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA synchronous=FULL;
@@ -61,8 +77,17 @@ export class Store {
         level TEXT NOT NULL, data_json TEXT, created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS events_run ON events(run_id,id);
-      PRAGMA user_version=1;
+      CREATE INDEX IF NOT EXISTS runs_project_status ON runs(project_id,status);
+      CREATE INDEX IF NOT EXISTS runs_connection_status ON runs(connection_id,status);
+      CREATE INDEX IF NOT EXISTS runs_kind_status ON runs(kind,status);
+      CREATE INDEX IF NOT EXISTS runs_target ON runs(json_extract(input_json,'$.targetRunId'),status);
+      CREATE INDEX IF NOT EXISTS runs_pipeline ON runs(json_extract(input_json,'$.pipelineId'),kind);
+      CREATE INDEX IF NOT EXISTS runs_runner ON runs(json_extract(input_json,'$.runnerId'),status);
+      CREATE INDEX IF NOT EXISTS effects_state ON effects(state,run_id);
+      CREATE INDEX IF NOT EXISTS documents_project ON documents(kind,json_extract(payload,'$.projectId'),updated_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS runs_project_effect_key ON runs(project_id,kind,dedupe_key) WHERE connection_id IS NULL AND write_effect=1;
     `);
+    if (version === 0) this.db.exec('PRAGMA user_version=1');
     try {
       this.db.exec('BEGIN IMMEDIATE');
       const current = this.db.prepare('SELECT * FROM controller WHERE id=1').get() as Row | undefined;
@@ -86,9 +111,29 @@ export class Store {
     if (!row || row.owner !== this.owner || Number(row.expires_at) <= this.clock()) throw new AppError('CONTROLLER_FENCED', '작업 소유권이 변경되었습니다. 제어 서비스를 다시 연결해 주세요.', 409);
   }
   transaction<T>(callback: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
-    try { this.assertOwner(); const result = callback(); this.db.exec('COMMIT'); return result; }
-    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    const depth = this.transactionDepth;
+    const pending = this.committed.length;
+    const savepoint = 'nested_' + depth;
+    this.db.exec(depth ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    this.transactionDepth++;
+    let result: T;
+    try {
+      this.assertOwner(); result = callback();
+      if (result && typeof (result as { then?: unknown }).then === 'function') throw new AppError('ASYNC_TRANSACTION', '저장 트랜잭션은 동기 작업만 허용합니다.');
+      this.db.exec(depth ? `RELEASE ${savepoint}` : 'COMMIT');
+    } catch (error) {
+      this.committed.length = pending;
+      this.db.exec(depth ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK');
+      throw error;
+    } finally { this.transactionDepth--; }
+    if (!depth) {
+      const callbacks = this.committed; this.committed = [];
+      for (const callback of callbacks) callback();
+    }
+    return result;
+  }
+  afterCommit(callback: () => void): void {
+    if (this.transactionDepth) this.committed.push(callback); else callback();
   }
   renew(): void {
     this.transaction(() => {
@@ -100,8 +145,8 @@ export class Store {
     this.transaction(() => {
       const interrupted = this.db.prepare("SELECT r.*,e.state AS effect_state FROM runs r LEFT JOIN effects e ON e.run_id=r.id WHERE r.status='running'").all() as Row[];
       for (const row of interrupted) {
-        const ambiguous = row.effect_state === 'dispatched';
-        const status = ambiguous ? 'action_required' : 'queued';
+        const ambiguous = ['dispatched','action_required'].includes(String(row.effect_state));
+        const status = ambiguous ? 'action_required' : row.kind === 'web-deployment' ? 'failed' : 'queued';
         this.db.prepare('UPDATE runs SET status=?,owner_token=NULL,lease_until=NULL,updated_at=?,error=? WHERE id=?')
           .run(status, this.iso(), ambiguous ? '이전 실행의 외부 반영 결과를 확인해야 합니다. 중복 방지를 위해 다시 보내지 않았습니다.' : null, String(row.id));
         if (ambiguous) this.db.prepare("UPDATE effects SET state='action_required',updated_at=? WHERE run_id=?").run(this.iso(), String(row.id));
@@ -122,6 +167,35 @@ export class Store {
   list<T>(kind: DocumentKind): T[] {
     return (this.db.prepare('SELECT payload FROM documents WHERE kind=? ORDER BY updated_at DESC').all(kind) as Row[]).map(row => JSON.parse(String(row.payload)) as T);
   }
+  putDocument<K extends CoreDocumentKind>(kind: K, id: string, value: DocumentPayloads[K]): DocumentPayloads[K] {
+    validateDocument(kind, id, value);
+    return this.put(kind, id, value);
+  }
+  document<K extends CoreDocumentKind>(kind: K, id: string): DocumentPayloads[K] | undefined {
+    const value = this.get<unknown>(kind, id);
+    if (value === undefined) return undefined;
+    validateDocument(kind, id, value); return value;
+  }
+  /** 최근 갱신 순 문서. limit은 표시 상한을 DB에서 적용할 때만 쓴다. */
+  documents<T>(kind: DocumentKind, filter: DocumentFilter & { limit?: number } = {}): T[] {
+    const where = documentWhere(kind, filter);
+    const values: (string | number)[] = [...where.values];
+    if (filter.limit !== undefined) {
+      if (!Number.isSafeInteger(filter.limit) || filter.limit < 1) throw new AppError('INVALID_QUERY', '문서 조회 개수가 올바르지 않습니다.');
+      values.push(filter.limit);
+    }
+    return (this.db.prepare(`SELECT payload FROM documents WHERE ${where.sql} ORDER BY updated_at DESC,rowid DESC${filter.limit === undefined ? '' : ' LIMIT ?'}`).all(...values) as Row[]).map(row => JSON.parse(String(row.payload)) as T);
+  }
+  /** (order 필드, id) 내림차순 keyset 페이지. 같은 시각 문서도 id로 경계가 겹치거나 빠지지 않는다. */
+  documentPage<T>(kind: DocumentKind, query: DocumentPageQuery): DocumentPage<T> {
+    const { sql, values, limit } = documentPageSql(kind, query);
+    const rows = this.db.prepare(sql).all(...values) as Row[];
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return { items: page.map(row => JSON.parse(String(row.payload)) as T),
+      next: rows.length > limit && last ? { value: String(last.cursor_value), id: String(last.id) } : null };
+  }
+
   remove(kind: DocumentKind, id: string): void {
     this.transaction(() => this.db.prepare('DELETE FROM documents WHERE kind=? AND id=?').run(kind, id));
   }
@@ -134,24 +208,24 @@ export class Store {
       for (const event of events) this.addEventDirect(event);
     });
   }
-  createRun(options: RunInput): Run {
+  createRun(options: RunInput, mutate?: RunMutation): Run {
     prohibitSecrets(options.input);
     const encoded = canonical(options.input);
     const hash = createHash('sha256').update(encoded).digest('hex');
-    if (options.writeEffect && (!options.connectionId || !options.idempotencyKey || !/^[a-zA-Z0-9_-]{8,128}$/.test(options.idempotencyKey))) {
+    if (options.writeEffect && ((!options.connectionId && !(options.projectId && options.kind === 'web-deployment')) || !options.idempotencyKey || !/^[a-zA-Z0-9_-]{8,128}$/.test(options.idempotencyKey))) {
       throw new AppError('IDEMPOTENCY_REQUIRED', '외부 변경에는 동일 작업을 식별할 요청 키가 필요합니다.');
     }
     return this.transaction(() => {
       if (options.idempotencyKey) {
-        const found = this.db.prepare('SELECT * FROM runs WHERE connection_id=? AND kind=? AND dedupe_key=?').get(options.connectionId ?? null, options.kind, options.idempotencyKey) as Row | undefined;
+        const found = this.db.prepare('SELECT * FROM runs WHERE connection_id IS ? AND kind=? AND dedupe_key=? AND (connection_id IS NOT NULL OR project_id IS ?)').get(options.connectionId ?? null, options.kind, options.idempotencyKey, options.projectId ?? null) as Row | undefined;
         if (found) {
           if (found.input_hash !== hash || found.project_id !== (options.projectId ?? null)) throw new AppError('IDEMPOTENCY_CONFLICT', '같은 요청 키에 다른 변경 내용을 사용할 수 없습니다.', 409);
-          return runFrom(found);
+          const run = runFrom(found); mutate?.(run, true); return run;
         }
       }
       if (options.writeEffect) {
         const pending = this.db.prepare("SELECT * FROM runs WHERE connection_id=? AND kind=? AND project_id IS ? AND input_hash=? AND status IN ('queued','running','retry_wait','action_required','waiting_external')").get(options.connectionId ?? null, options.kind, options.projectId ?? null, hash) as Row | undefined;
-        if (pending) return runFrom(pending);
+        if (pending) { const run = runFrom(pending); mutate?.(run, true); return run; }
       }
       const id = randomUUID(); const at = this.iso();
       const lock = options.connectionId ? 'connection:' + options.connectionId : options.projectId ? 'project:' + options.projectId : id;
@@ -163,7 +237,7 @@ export class Store {
         this.db.prepare('INSERT INTO documents VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at').run('pipeline', options.pipeline.id, JSON.stringify(value), at);
       }
       this.addEventDirect({ projectId: options.projectId ?? null, runId: id, kind: 'queued', message: options.label + ' 작업을 예약했습니다.', level: 'info' });
-      return this.getRun(id)!;
+      const run = this.getRun(id)!; mutate?.(run, false); return run;
     });
   }
   getRun(id: string): Run | undefined {
@@ -171,6 +245,56 @@ export class Store {
     return row ? runFrom(row) : undefined;
   }
   runs(limit = 100): Run[] { return (this.db.prepare('SELECT * FROM runs ORDER BY created_at DESC,rowid DESC LIMIT ?').all(limit) as Row[]).map(runFrom); }
+  requestKey(id: string): string | undefined {
+    return (this.db.prepare('SELECT dedupe_key FROM runs WHERE id=?').get(id) as Row | undefined)?.dedupe_key as string | undefined;
+  }
+  private runFilter(query: RunQuery): { sql: string; values: (string | number)[] } {
+    const parts: string[] = []; const values: (string | number)[] = [];
+    for (const [column, value] of [['project_id', query.projectId], ['connection_id', query.connectionId]] as const) {
+      if (value !== undefined) { parts.push(`${column}=?`); values.push(value); }
+    }
+    for (const [column, list] of [['status', query.statuses], ['kind', query.kinds]] as const) {
+      if (list) { parts.push(`${column} IN (${list.map(() => '?').join(',')})`); values.push(...list); }
+    }
+    for (const [field, value] of [['targetRunId', query.targetRunId], ['runnerId', query.runnerId], ['pipelineId', query.pipelineId]] as const) {
+      if (value !== undefined) { parts.push(`json_extract(input_json,'$.${field}')=?`); values.push(value); }
+    }
+    if (query.input) { parts.push('input_hash=?'); values.push(createHash('sha256').update(canonical(query.input)).digest('hex')); }
+    if (query.updatedSince) { parts.push('updated_at>=?'); values.push(query.updatedSince); }
+    if (query.finishedSince) { parts.push('COALESCE(finished_at,created_at)>=?'); values.push(query.finishedSince); }
+    return { sql: parts.length ? parts.join(' AND ') : '1', values };
+  }
+  findRuns(query: RunQuery): Run[] {
+    const { sql, values } = this.runFilter(query);
+    return (this.db.prepare(`SELECT * FROM runs WHERE ${sql} ORDER BY created_at DESC,rowid DESC`).all(...values) as Row[]).map(runFrom);
+  }
+  hasRuns(query: RunQuery): boolean {
+    const { sql, values } = this.runFilter(query);
+    return !!this.db.prepare(`SELECT 1 FROM runs WHERE ${sql} LIMIT 1`).get(...values);
+  }
+  unresolvedEffects(scope: { projectId?: string; connectionId?: string } = {}): Run[] {
+    const { sql, values } = this.runFilter(scope);
+    return (this.db.prepare(`SELECT * FROM runs WHERE ${sql} AND EXISTS (SELECT 1 FROM effects e WHERE e.run_id=runs.id AND e.state IN ('dispatched','action_required'))`).all(...values) as Row[]).map(runFrom);
+  }
+  hasUnresolvedDeployment(projectId?: string): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM documents WHERE kind='web-deployment'
+      AND (? IS NULL OR json_extract(payload,'$.projectId')=?)
+      AND (json_extract(payload,'$.status')='running' OR (json_extract(payload,'$.status') IN ('action_required','uncertain') AND COALESCE(json_extract(payload,'$.resolved'),0)=0)) LIMIT 1`).get(projectId ?? null, projectId ?? null);
+  }
+  /** External CLI work uses a project-scoped real run, never a fictitious connection. */
+  reserveDeployment(projectId: string, deploymentId: string): ClaimedRun {
+    return this.transaction(() => {
+      if (this.hasUnresolvedDeployment(projectId) || this.hasRuns({ projectId, kinds: ['web-deployment'], statuses: ['running','action_required','waiting_external'] })) throw new AppError('DEPLOY_UNRESOLVED', '이전 배포 결과를 먼저 확인하세요.', 409);
+      const run = this.createRun({ projectId, kind: 'web-deployment', label: '웹 배포', input: { deploymentId }, writeEffect: true, idempotencyKey: deploymentId });
+      const token = this.owner + ':' + randomUUID();
+      this.db.prepare("UPDATE runs SET status='running',owner_token=?,lease_until=?,started_at=?,attempt=1 WHERE id=?").run(token, this.clock() + this.leaseDuration, this.iso(), run.id);
+      return { run: this.getRun(run.id)!, token };
+    });
+  }
+  deploymentRun(deploymentId: string): Run | undefined {
+    const row = this.db.prepare("SELECT * FROM runs WHERE kind='web-deployment' AND dedupe_key=?").get(deploymentId) as Row | undefined;
+    return row ? runFrom(row) : undefined;
+  }
   pendingCampaigns(projectId: string): Run[] {
     return (this.db.prepare("SELECT * FROM runs WHERE project_id=? AND kind IN ('create-campaign','update-campaign') AND status IN ('queued','running','retry_wait','action_required','waiting_external')").all(projectId) as Row[]).map(runFrom);
   }
@@ -183,7 +307,7 @@ export class Store {
   }
   claim(): ClaimedRun | undefined {
     return this.transaction(() => {
-      const row = this.db.prepare(`SELECT * FROM runs r WHERE r.status IN ('queued','retry_wait') AND r.available_at<=? AND NOT EXISTS(SELECT 1 FROM runs a WHERE a.status='running' AND a.lock_key=r.lock_key) ORDER BY r.created_at,r.rowid LIMIT 1`).get(this.clock()) as Row | undefined;
+      const row = this.db.prepare(`SELECT * FROM runs r WHERE r.kind!='web-deployment' AND r.status IN ('queued','retry_wait') AND r.available_at<=? AND NOT EXISTS(SELECT 1 FROM runs a WHERE a.status='running' AND a.lock_key=r.lock_key) ORDER BY r.created_at,r.rowid LIMIT 1`).get(this.clock()) as Row | undefined;
       if (!row) return undefined;
       const token = this.owner + ':' + randomUUID();
       this.db.prepare("UPDATE runs SET status='running',owner_token=?,lease_until=?,attempt=attempt+1,started_at=?,updated_at=?,error=NULL WHERE id=?")
@@ -270,7 +394,7 @@ export class Store {
       const run = this.getRun(id);
       if (!run) throw new AppError('NOT_FOUND', '작업을 찾을 수 없습니다.', 404);
       const effect = this.effectState(id);
-      if (!['failed','cancelled'].includes(run.status) || (effect && effect !== 'prepared')) throw new AppError('RECONCILIATION_REQUIRED', '외부 반영 여부를 확인한 뒤 재시도해야 합니다. 이 작업을 자동으로 다시 보내지 않습니다.', 409);
+      if (run.kind === 'web-deployment' || !['failed','cancelled'].includes(run.status) || (effect && effect !== 'prepared')) throw new AppError('RECONCILIATION_REQUIRED', '외부 반영 여부를 확인한 뒤 재시도해야 합니다. 이 작업을 자동으로 다시 보내지 않습니다.', 409);
       this.db.prepare("UPDATE runs SET status='queued',error=NULL,finished_at=NULL,updated_at=? WHERE id=?").run(this.iso(), id);
       return this.getRun(id)!;
     });

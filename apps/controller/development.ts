@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { AppService } from "./service.js";
+import type { DevelopmentHooks } from "./contracts.js";
 import { AppError, object, text } from "../../packages/domain/errors.js";
 import { StudioTerminals } from "../../packages/development/terminal.js";
 import {
@@ -28,7 +28,7 @@ export class DevelopmentStudio {
   readonly deployments: WebDeployments;
   private locked = false;
   constructor(
-    private service: AppService,
+    private service: DevelopmentHooks,
     private mode: "demo" | "live",
   ) {
     const socketRoot = join(

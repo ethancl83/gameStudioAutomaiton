@@ -1,7 +1,7 @@
 import { createHash, X509Certificate } from 'node:crypto';
 import { copyFile, lstat, mkdir, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { dirname, extname, join, resolve, sep } from 'node:path';
-import { createSnapshot } from '../../apps/runner/index.js';
+import { createSnapshot } from '../runner/snapshot.js';
 import { AppError, canonical } from '../domain/errors.js';
 import type { BuildKeyManager, BuildKeyReference, BuildSecuritySelection } from './index.js';
 import { assertAndroidCertificate } from './index.js';

@@ -1,6 +1,6 @@
 import { command, requireTool } from "./process.js";
 import { repository } from "./git.js";
-import type { GithubItem } from "./types.js";
+import type { GithubItem, GithubItemPage, GithubRepository } from "./types.js";
 import { AppError } from "../domain/errors.js";
 export async function github<T>(
   endpoint: string,
@@ -13,22 +13,15 @@ export async function github<T>(
     }),
   );
 }
-export async function repositories() {
-  return github<
-    Array<{
-      id: number;
-      full_name: string;
-      clone_url: string;
-      private: boolean;
-    }>
-  >("user/repos?per_page=100&sort=updated");
+export async function repositories(): Promise<GithubRepository[]> {
+  return github<GithubRepository[]>("user/repos?per_page=100&sort=updated");
 }
 export async function listItems(
   repo: string,
   kind: "issue" | "pr",
   state = "open",
   page = 1,
-) {
+): Promise<GithubItemPage> {
   if (
     !["open", "closed", "all"].includes(state) ||
     !Number.isInteger(page) ||

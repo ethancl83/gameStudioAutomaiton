@@ -8,14 +8,18 @@ export interface ExecutionContext {
   markRejected?(): void;
   checkpoint(data: Record<string, unknown>): void;
 }
-export type RunHandler = (run: Run, context: ExecutionContext) => Promise<{ result: Record<string, unknown>; status?: RunStatus; effectResolved?: boolean }>;
+export interface ExecutionResult { result: Record<string, unknown>; status?: RunStatus; effectResolved?: boolean; commit?: () => void }
+export type RunHandler = (run: Run, context: ExecutionContext) => Promise<ExecutionResult>;
 
 export class JobQueue {
   private active = new Map<string, { abort: AbortController; task: Promise<void> }>();
   private interval: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
+  private failure: string | undefined;
+  get error(): string | undefined { return this.failure; }
   constructor(private store: Store, private handler: RunHandler, private concurrency = 2) {}
   start(): void {
+    if (this.failure) throw new Error(this.failure);
     clearInterval(this.interval);
     this.stopped = false;
     this.interval = setInterval(() => this.tick(), 300);
@@ -31,16 +35,17 @@ export class JobQueue {
         const abort = new AbortController();
         const { run, token } = claimed;
         const task = Promise.resolve().then(async () => {
+          let value: ExecutionResult;
           try {
-            const value = await this.handler(run, {
+            value = await this.handler(run, {
               signal: abort.signal,
-              markDispatched: () => this.store.markDispatched(run.id, token),
-              markRejected: () => this.store.markRejected(run.id, token),
-              checkpoint: data => this.store.checkpoint(run.id, token, data),
-              progress: message => this.store.addEvent({ projectId: run.projectId, runId: run.id, kind: 'progress', message }),
+              markDispatched: () => this.write(() => this.store.markDispatched(run.id, token), run),
+              markRejected: () => this.write(() => this.store.markRejected(run.id, token), run),
+              checkpoint: data => this.write(() => this.store.checkpoint(run.id, token, data), run),
+              progress: message => this.write(() => this.store.addEvent({ projectId: run.projectId, runId: run.id, kind: 'progress', message }), run),
             });
-            this.store.finish(run.id, token, value.status ?? 'succeeded', value.result, null, value.effectResolved === true);
           } catch (error) {
+            if (this.failure || this.fenced(error)) throw error;
             const current = this.store.getRun(run.id);
             const cleanup = dockerKeyCleanupFailure(error);
             if (cleanup) {
@@ -59,18 +64,35 @@ export class JobQueue {
               this.store.finish(run.id, token, actionRequired ? 'action_required' : abort.signal.aborted ? 'cancelled' : 'failed', { failureCode: code ?? 'INTERNAL_ERROR', ...(cleanup ? { cleanup: cleanup.details } : {}) },
                 uncertain ? '외부 요청 전송 후 결과가 확정되지 않았습니다. 중복 방지를 위해 다시 보내지 않았습니다. ' + message : message);
             }
+            return;
           }
-        }).catch(() => {
-          // A fenced controller cannot settle an old task; the new owner reconciles it.
-        }).finally(() => { this.active.delete(run.id); });
+          // Result documents, reconciliation, effect and completion share the
+          // same commit. A storage failure must not enter the handler retry path.
+          this.store.transaction(() => {
+            value.commit?.();
+            this.store.finish(run.id, token, value.status ?? 'succeeded', value.result, null, value.effectResolved === true);
+          });
+        }).catch(error => { this.halt(error, run); }).finally(() => { this.active.delete(run.id); });
         this.active.set(run.id, { abort, task });
       }
-    } catch (error) {
-      if ((error as { code?: string }).code === 'CONTROLLER_FENCED') {
-        this.stopped = true;
-        for (const task of this.active.values()) task.abort.abort();
-      } else throw error;
+    } catch (error) { this.halt(error); }
+  }
+  private fenced(error: unknown): boolean {
+    return ['CONTROLLER_FENCED','RUN_FENCED'].includes(String((error as { code?: string })?.code));
+  }
+  private write(callback: () => void, run: Run): void {
+    try { callback(); } catch (error) { this.halt(error, run); throw error; }
+  }
+  private halt(error: unknown, run?: Run): void {
+    if (this.fenced(error)) {
+      if ((error as { code: string }).code === 'RUN_FENCED') return;
+      this.pause(); for (const task of this.active.values()) task.abort.abort(); return;
     }
+    this.pause();
+    this.failure = redact(error instanceof Error ? error.message : '작업 상태 저장에 실패했습니다.');
+    for (const task of this.active.values()) task.abort.abort();
+    try { this.store.addEvent({ projectId: run?.projectId, runId: run?.id, kind: 'queue.halted', level: 'error', message: this.failure }); }
+    catch { console.error('Job queue halted: ' + this.failure); }
   }
   cancel(id: string): Run {
     const active = this.active.get(id);
@@ -92,7 +114,7 @@ export class JobQueue {
   async stop(): Promise<void> {
     this.stopped = true; clearInterval(this.interval);
     for (const [id, task] of this.active) {
-      try { this.cancel(id); } catch {}
+      if (!this.failure) { try { this.cancel(id); } catch (error) { this.halt(error); } }
       task.abort.abort();
     }
     await Promise.allSettled([...this.active.values()].map(task => task.task));

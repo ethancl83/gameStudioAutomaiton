@@ -256,6 +256,23 @@ export const OPERATION_LABELS: Record<string, string> = {
   'hide-reply': '답글 숨김 관리',
   'sdk-integration-config': '광고 SDK 연결 설정',
   reconcile: '외부 처리 상태 확인',
+  'activate-product': '상품 판매 시작',
+  'deactivate-product': '상품 판매 중지',
+  'submit-product': '상품 심사 제출',
+  'create-subscription': '자동 갱신 구독 생성',
+  'upload-app-preview': '앱 프리뷰 동영상 등록',
+  'probe-experiments': '실험 기능 확인',
+  'list-experiments': '실험 조회',
+  'experiment-metrics': '실험 지표 수집',
+  'create-experiment': '실험 생성',
+  'end-experiment': '실험 종료',
+  'promote-experiment': '실험 승자 적용',
+  'probe-ad-unit-experiments': 'MAX 실험 기능 확인',
+  'list-ad-unit-experiments': 'MAX 실험 조회',
+  'create-ad-unit-experiment': 'MAX 실험 생성',
+  'promote-ad-unit-experiment': 'MAX 실험 승자 적용',
+  'deprecate-ad-unit-experiment': 'MAX 실험 폐기',
+  'campaign-attribution': '캠페인 귀속 지표 수집',
 };
 
 // 알려진 라벨이 없으면 슬러그를 사람이 읽기 쉬운 형태로 바꾼다(예: 'submit-for-review' → 'Submit For Review').

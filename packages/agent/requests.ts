@@ -16,4 +16,5 @@ export const SCREEN_REQUESTS: Record<AgentScreen, { label: string }> = {
   settings: { label: '설정' },
   development: { label: '개발 작업' },
   'web-deployments': { label: '웹 배포' },
+  growth: { label: '성장 운영' },
 };

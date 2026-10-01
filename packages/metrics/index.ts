@@ -20,7 +20,14 @@ export function summarizeMetrics(facts: MetricFact[]): MetricsSummary[] {
     const key = fact.date + ':' + fact.currency;
     const apps = maxCoverage.get(key) ?? new Set<string>(); apps.add(fact.appIdentifier ?? '*'); maxCoverage.set(key, apps);
   }
+  // Apple 정산(settled)은 같은 계정·통화·기간의 일별 판매 proceeds를 대체한다. 둘 다 더하면 이중 계산이다.
+  const settled = facts.flatMap(fact => {
+    const match = fact.basis === 'settled' && fact.sourceId.startsWith('apple-finance:') ? /(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})$/.exec(fact.sourceId) : null;
+    return match ? [{ connectionId: fact.connectionId, currency: fact.currency, from: match[1]!, to: match[2]! }] : [];
+  });
+  const replaced = (fact: MetricFact) => fact.sourceId.startsWith('apple:sales:') && settled.some(item => item.connectionId === fact.connectionId && item.currency === fact.currency && item.from <= fact.date && fact.date <= item.to);
   for (const fact of facts) {
+    if (replaced(fact)) continue;
     const key = `${fact.connectionId}:${fact.sourceId}:${fact.kind}:${fact.date}:${fact.currency}`;
     if (seen.has(key)) continue;
     seen.add(key);

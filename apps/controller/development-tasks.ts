@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, lstat, realpath, readdir, rm, unlink } from "node:fs/promises";
 import { join, relative, isAbsolute, dirname } from "node:path";
-import type { AppService } from "./service.js";
+import type { DevelopmentTaskHooks } from "./contracts.js";
 import { AppError, redact } from "../../packages/domain/errors.js";
 import { git, gitState, fingerprint, verifiedCommit, checkedPaths, credentialPath, recordBaseline, safeDiff } from "../../packages/development/git.js";
 import { sourceItem, github } from "../../packages/development/github.js";
@@ -21,7 +21,7 @@ export class DevelopmentTasks {
   private aborting = new Map<string, AbortController>();
   private closed = false;
   constructor(
-    private service: AppService,
+    private service: DevelopmentTaskHooks,
     private terminals: StudioTerminals,
     private root: string,
     private hashWorktree: typeof fingerprint = fingerprint,

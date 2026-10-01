@@ -52,12 +52,21 @@ export interface SocialProjectRef {
  * network, secrets or durable state is injected so adapters stay pure and
  * testable and never reach for ambient credentials or `fetch`.
  */
+/** Controller-verified local file (mirrors connectors VerifiedArtifact). */
+export interface SocialArtifact { path: string; name: string; size: number; sha256: string; kind?: 'file' | 'directory' }
+
 export interface SocialContext {
   connection: SocialConnectionRef;
   /** Non-secret connection settings only; secrets are read via accessToken. */
   credentials: Record<string, string>;
   project?: SocialProjectRef;
   signal: AbortSignal;
+  /**
+   * Media bytes for uploads (X create-post/reply with mediaAssetId). Supplied
+   * by the controller after verifying size and sha256; adapters never read
+   * arbitrary paths from operation input.
+   */
+  artifact?: SocialArtifact;
   /** Journals intent (prepared→dispatched) before the first external write. */
   markDispatched(): void;
   /** Durable pre-write journal hook (e.g. Threads container id). */

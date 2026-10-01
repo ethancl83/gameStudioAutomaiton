@@ -1,4 +1,4 @@
-import type { Connection, ExternalResource, Project, Run } from '../../packages/domain/index.js';
+import type { Connection, ExternalResource, Project, ReleaseObservation, Run } from '../../packages/domain/index.js';
 import { AppError, canonical } from '../../packages/domain/errors.js';
 import { parseMicros } from '../../packages/metrics/index.js';
 
@@ -43,5 +43,21 @@ export function enforceCampaignBudget(project: Project | undefined, connection: 
   const total = [...amounts.values()].reduce((sum, amount) => sum + amount, 0n);
   if (total > parseMicros(project.policy.maxDailyBudgetMicros)) {
     throw new AppError('BUDGET_LIMIT', '기존 캠페인과 대기 중인 변경을 합친 일일 설정 예산이 프로젝트 한도를 넘습니다.', 403);
+  }
+}
+
+/**
+ * 스토어 앱을 연결한 프로젝트는 공개 출시가 확인되기 전에는 광고를 활성화하지 않는다(미출시 앱 광고 대기).
+ * 중지·PAUSED 생성은 허용한다. 스토어 매핑이 없는 프로젝트는 출시 여부를 알 수 없어 기존 정책만 적용한다.
+ */
+export function enforceReleasedForAds(project: Project | undefined, connection: Connection, operation: string, input: Record<string, unknown>, observations: ReleaseObservation[]): void {
+  if (!project || !['google-ads', 'applovin-ads'].includes(connection.provider) || !project.storeApps || !Object.keys(project.storeApps).length) return;
+  const status = String(input.activation ?? input.status ?? '').toUpperCase();
+  const activates = (operation === 'create-campaign' && (connection.provider === 'applovin-ads' || ['ENABLED', 'LIVE', 'ACTIVE'].includes(status)))
+    || (['update-campaign', 'enable-campaign', 'activate-campaign'].includes(operation) && ['ENABLED', 'LIVE', 'ACTIVE'].includes(status))
+    || ['enable-campaign', 'activate-campaign'].includes(operation);
+  if (!activates) return;
+  if (!observations.some(item => item.projectId === project.id && item.published)) {
+    throw new AppError('APP_NOT_RELEASED', '스토어 공개 출시가 확인된 뒤 광고를 활성화합니다. 캠페인은 PAUSED로 준비해 두세요.', 409);
   }
 }

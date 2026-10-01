@@ -1,19 +1,14 @@
 import { openAsBlob } from 'node:fs';
 import { extname } from 'node:path';
 import { AppError, text } from '../domain/errors.js';
-import { parseMicros } from '../metrics/index.js';
 import type { Connector, ConnectorContext, ConnectorResult, ResourceInput } from './types.js';
+import { listPlayProducts, setPlayProductState, upsertPlayProduct } from './play-products.js';
 import { collectPlayEarnings } from './play-earnings.js';
 import { listPlayListings, preparePlayApp, promotePlayRelease, reconcilePlayListingEdit, updatePlayListing, uploadPlayListingImage } from './store-play-edits.js';
 
 const HOST = 'https://androidpublisher.googleapis.com';
 const ROOT = HOST + '/androidpublisher/v3/applications/';
 const SCOPE = 'https://www.googleapis.com/auth/androidpublisher';
-interface ProductRecord {
-  packageName: string; productId: string;
-  listings?: { title?: string; languageCode?: string; description?: string }[];
-  purchaseOptions?: Record<string, unknown>[]; basePlans?: Record<string, unknown>[];
-}
 interface ReleaseRecord {
   track: string; releaseName?: string; releaseLifecycleState: string;
   activeArtifacts?: { versionCode: number }[];
@@ -34,32 +29,8 @@ function segment(value: unknown, label: string): string {
 async function authorization(ctx: ConnectorContext): Promise<Record<string, string>> {
   return { Authorization: 'Bearer ' + await ctx.accessToken([SCOPE]) };
 }
-function productResource(product: ProductRecord, kind: 'one-time' | 'subscription'): ResourceInput {
-  const variants = product.purchaseOptions ?? product.basePlans ?? [];
-  return {
-    kind: 'product', externalId: `${product.packageName}:${kind}:${product.productId}`,
-    name: product.listings?.[0]?.title || product.productId,
-    status: String(variants[0]?.state ?? 'DRAFT'),
-    data: { packageName: product.packageName, productId: product.productId, productType: kind, listings: product.listings ?? [], variants },
-  };
-}
 async function listProducts(ctx: ConnectorContext): Promise<ConnectorResult> {
-  const pkg = packageName(ctx); const headers = await authorization(ctx);
-  const resources: ResourceInput[] = [];
-  for (const [path, field, kind] of [['oneTimeProducts', 'oneTimeProducts', 'one-time'], ['subscriptions', 'subscriptions', 'subscription']] as const) {
-    let pageToken = ''; const seen = new Set<string>();
-    do {
-      if (seen.has(pageToken) || seen.size >= 100) throw new AppError('PAGINATION_LIMIT', '상품 목록이 너무 큽니다. 앱별로 조회해 주세요.');
-      seen.add(pageToken);
-      const query = new URLSearchParams({ pageSize: '1000', ...(pageToken ? { pageToken } : {}) });
-      const data = await ctx.request<Record<string, unknown>>(ROOT + pkg + '/' + path + '?' + query, { headers });
-      const records = data[field];
-      if (records !== undefined && !Array.isArray(records)) throw new AppError('INVALID_PROVIDER_RESPONSE', '상품 목록 응답 형식을 확인할 수 없습니다.');
-      for (const product of (records ?? []) as ProductRecord[]) resources.push(productResource({ ...product, packageName: pkg }, kind));
-      pageToken = typeof data.nextPageToken === 'string' ? data.nextPageToken : '';
-    } while (pageToken);
-  }
-  return { resources, summary: { packageName: pkg, productCount: resources.length } };
+  return listPlayProducts(ctx, packageName(ctx), await authorization(ctx));
 }
 async function listReleases(input: Record<string, unknown>, ctx: ConnectorContext): Promise<ConnectorResult> {
   const pkg = packageName(ctx); const headers = await authorization(ctx);
@@ -80,83 +51,6 @@ async function listReleases(input: Record<string, unknown>, ctx: ConnectorContex
     }
   }
   return { resources, summary: { packageName: pkg, releaseCount: resources.length } };
-}
-function money(micros: unknown, currency: unknown) {
-  const value = parseMicros(micros);
-  if (value <= 0n) throw new AppError('INVALID_AMOUNT', '상품 가격은 0보다 커야 합니다.');
-  const code = text(currency, '통화', 3).toUpperCase();
-  if (!/^[A-Z]{3}$/.test(code)) throw new AppError('INVALID_AMOUNT', '통화 코드를 확인해 주세요.');
-  return { currencyCode: code, units: (value / 1_000_000n).toString(), nanos: Number(value % 1_000_000n) * 1000 };
-}
-async function upsertProduct(operation: string, input: Record<string, unknown>, ctx: ConnectorContext): Promise<ConnectorResult> {
-  const pkg = packageName(ctx); const headers = await authorization(ctx);
-  const create = operation === 'create-product';
-  let kind: 'one-time' | 'subscription' = input.type === 'subscription' ? 'subscription' : 'one-time';
-  let id: string;
-  if (create) id = segment(input.productId, '상품 ID');
-  else {
-    const parts = text(input.externalId, '상품 식별자').split(':');
-    if (parts.length !== 3 || parts[0] !== pkg || !['one-time', 'subscription'].includes(parts[1])) {
-      throw new AppError('RESOURCE_MISMATCH', '선택한 프로젝트의 동기화된 상품을 선택해 주세요.');
-    }
-    kind = parts[1] as typeof kind; id = segment(parts[2], '상품 ID');
-  }
-  if (!/^[a-z0-9][a-z0-9_.]{0,39}$/.test(id)) throw new AppError('INVALID_INPUT', '상품 ID는 소문자·숫자·밑줄·마침표를 사용하는 40자 이하 값이어야 합니다.');
-  if (input.status !== undefined) throw new AppError('UNSUPPORTED_CHANGE', '이 버전은 상품 가격과 설명을 관리합니다. 판매 상태 전환은 서비스의 상품 심사·활성화 절차가 필요합니다.');
-  const price = money(input.priceMicros, input.currency);
-  const region = text(input.country ?? ctx.credentials.defaultRegion ?? 'US', '판매 국가', 2).toUpperCase();
-  if (!/^[A-Z]{2}$/.test(region)) throw new AppError('INVALID_INPUT', '판매 국가 코드를 확인해 주세요.');
-  const converted = await ctx.request<{ regionVersion: { version: string }; convertedRegionPrices: Record<string, { price: typeof price }> }>(
-    ROOT + pkg + '/pricing:convertRegionPrices', { method: 'POST', headers, json: { price }, write: false });
-  const localPrice = converted.convertedRegionPrices?.[region]?.price;
-  if (!converted.regionVersion?.version || !localPrice) throw new AppError('REGION_UNAVAILABLE', '선택한 국가의 상품 가격을 계산할 수 없습니다.');
-  // Users select a currency and country explicitly. A conversion cannot silently change that contract.
-  if (localPrice.currencyCode !== price.currencyCode) throw new AppError('CURRENCY_MISMATCH', '상품 통화와 판매 국가의 통화가 일치해야 합니다.');
-  const productPath = kind === 'subscription' ? 'subscriptions' : 'oneTimeProducts';
-  let product: ProductRecord;
-  if (create) {
-    const name = text(input.name, '상품 이름', 55);
-    const languageCode = text(input.language ?? ctx.credentials.defaultLanguage ?? 'en-US', '상품 언어', 20);
-    product = { packageName: pkg, productId: id, listings: [{ languageCode, title: name,
-      description: text(input.description ?? name, '상품 설명', 200) }] };
-    if (kind === 'subscription') {
-      const period = text(input.billingPeriod, '구독 결제 주기', 5);
-      if (!['P1W', 'P1M', 'P3M', 'P6M', 'P1Y'].includes(period)) throw new AppError('INVALID_INPUT', '구독 결제 주기를 선택해 주세요.');
-      product.basePlans = [{ basePlanId: 'standard', autoRenewingBasePlanType: { billingPeriodDuration: period },
-        regionalConfigs: [{ regionCode: region, newSubscriberAvailability: true, price }] }];
-    } else product.purchaseOptions = [{ purchaseOptionId: 'standard', buyOption: {},
-      regionalPricingAndAvailabilityConfigs: [{ regionCode: region, availability: 'AVAILABLE', price }] }];
-  } else {
-    product = await ctx.request<ProductRecord>(ROOT + pkg + '/' + productPath + '/' + id, { headers });
-    const key = kind === 'subscription' ? 'basePlans' : 'purchaseOptions';
-    const variants = product[key];
-    if (!variants || variants.length !== 1) throw new AppError('MULTIPLE_PRICE_OPTIONS', '구매 옵션이 여러 개인 상품은 옵션별 편집이 필요합니다. 가격을 일괄 변경하지 않았습니다.');
-    // Preserve every other region and setting, and omit output-only state from the patch.
-    const variant = { ...variants[0] }; delete variant.state;
-    const pricesKey = kind === 'subscription' ? 'regionalConfigs' : 'regionalPricingAndAvailabilityConfigs';
-    const prices = (variant[pricesKey] ?? []) as Record<string, unknown>[];
-    if (!prices.some(item => item.regionCode === region)) throw new AppError('REGION_UNAVAILABLE', '이 상품에서 이미 설정된 국가의 가격만 변경할 수 있습니다.');
-    variant[pricesKey] = prices.map(item => item.regionCode === region ? { ...item, price } : item);
-    product = { packageName: pkg, productId: id, [key]: [variant] };
-  }
-  const query = new URLSearchParams({ 'regionsVersion.version': converted.regionVersion.version });
-  let path: string; let method: 'POST' | 'PATCH';
-  if (create && kind === 'subscription') { query.set('productId', id); path = 'subscriptions'; method = 'POST'; }
-  else {
-    query.set('updateMask', create ? 'listings,purchaseOptions' : kind === 'subscription' ? 'basePlans' : 'purchaseOptions');
-    if (create) query.set('allowMissing', 'true');
-    path = (kind === 'subscription' ? 'subscriptions' : 'onetimeproducts') + '/' + id; method = 'PATCH';
-    if (create) {
-      try {
-        await ctx.request(ROOT + pkg + '/oneTimeProducts/' + id, { headers });
-        throw new AppError('PRODUCT_EXISTS', '같은 ID의 상품이 이미 있습니다. 상품 변경 작업을 사용해 주세요.');
-      } catch (error) { if ((error as AppError).code !== 'RESOURCE_NOT_FOUND') throw error; }
-    }
-  }
-  const saved = await ctx.request<ProductRecord>(ROOT + pkg + '/' + path + '?' + query, { method, headers, json: product, write: true });
-  const resource = productResource({ ...saved, packageName: pkg, productId: id }, kind);
-  ctx.checkpoint({ externalId: resource.externalId });
-  return { resources: [resource], summary: { externalId: resource.externalId, state: resource.status, currency: price.currencyCode, region } };
 }
 async function uploadBuild(input: Record<string, unknown>, ctx: ConnectorContext): Promise<ConnectorResult> {
   const pkg = packageName(ctx); const artifact = ctx.artifact;
@@ -204,11 +98,16 @@ export const googlePlayConnector: Connector = {
       { key: 'defaultLanguage', label: '상품 기본 언어', placeholder: 'en-US' },
       { key: 'reportBucket', label: '수익 보고서 버킷 (선택)', placeholder: 'pubsite_prod_rev_0123456789' },
     ],
-    operations: ['check', 'sync', 'sync-app', 'list-products', 'create-product', 'update-product', 'list-releases', 'upload-build',
+    operations: ['check', 'sync', 'sync-app', 'list-products', 'create-product', 'update-product', 'activate-product', 'deactivate-product', 'list-releases', 'upload-build',
       'list-listings', 'update-listing', 'upload-listing-image', 'promote-release', 'create-app'],
     operationFields: {
       'update-product': [{ key: 'priceMicros', required: true }, { key: 'status', remove: true }, { key: 'description', remove: true },
-        { key: 'country', label: '판매 국가', type: 'text', placeholder: 'US', hint: '기존에 설정된 국가의 가격만 변경합니다. 비우면 연결의 기본 국가를 사용합니다.' }],
+        { key: 'country', label: '판매 국가', type: 'text', placeholder: 'US', hint: '기존에 설정된 국가의 가격만 변경합니다. 비우면 연결의 기본 국가를 사용합니다.' },
+        { key: 'optionId', label: '구매 옵션·기본 요금제 ID', placeholder: 'standard', hint: '옵션이 여러 개인 상품은 필수입니다. 다른 옵션과 국가 설정은 그대로 유지합니다.' }],
+      'activate-product': [{ key: 'priceMicros', remove: true }, { key: 'status', remove: true }, { key: 'description', remove: true },
+        { key: 'optionId', label: '구매 옵션·기본 요금제 ID', placeholder: 'standard', hint: '옵션이 하나면 비워도 됩니다. 이미 판매 중이면 변경하지 않습니다.' }],
+      'deactivate-product': [{ key: 'priceMicros', remove: true }, { key: 'status', remove: true }, { key: 'description', remove: true },
+        { key: 'optionId', label: '구매 옵션·기본 요금제 ID', placeholder: 'standard', hint: '판매 중(ACTIVE)인 옵션만 중지합니다. 기존 구독자는 유지됩니다.' }],
       'sync': [{ key: 'reportMonth', label: '수익 보고서 월 (선택)', type: 'text', placeholder: '202608', hint: '비우면 최근 완료된 3개월을 수집합니다.' }],
       'list-listings': [{ key: 'language', label: '언어 (선택)', placeholder: 'en-US', hint: '비우면 모든 현지화 목록과 아이콘·그래픽·휴대전화 스크린샷 메타데이터를 읽습니다. Play 편집 세션을 만들고 커밋 없이 삭제합니다.' }],
       'update-listing': [
@@ -248,7 +147,8 @@ export const googlePlayConnector: Connector = {
     setupUrl: 'https://developers.google.com/android-publisher/getting_started',
     limitations: ['최초 앱 생성·개발자 계약·첫 바이너리 등록은 Play Console에서 필요합니다. 공개 API는 앱을 만들지 않습니다.',
       '업로드용 서명 키와 API 계정은 별개입니다. 출시 결과는 심사 상태에 따라 추적합니다.',
-      '상품 생성은 초안 상태이며 판매 활성화와 여러 구매 옵션의 편집은 후속 지원 대상입니다.',
+      '상품 생성은 초안(DRAFT) 상태입니다. 판매 시작·중지는 activate-product/deactivate-product(일회성 purchaseOptions:batchUpdateStates, 구독 basePlans:activate|deactivate)로 옵션 단위로 전환합니다.',
+      '구매 옵션·기본 요금제가 여러 개인 상품은 optionId로 대상을 지정해 가격을 바꾸며 다른 옵션·국가 설정은 그대로 보냅니다. 구독 혜택(offers) 편집은 지원하지 않습니다.',
       '스토어 자료·이미지·단계적 출시는 Edits API 수명주기(insert→변경→validate→commit)를 사용합니다. 커밋 후 같은 쓰기를 자동 재전송하지 않습니다.',
       '수익 보고서는 버킷과 재무 조회 권한이 필요합니다. 최근 완료된 3개월의 수수료·환불 반영 수익을 수집하며 실제 입금액과 구분합니다.'],
   },
@@ -260,6 +160,7 @@ export const googlePlayConnector: Connector = {
       return { summary: { packageName: pkg, connected: true } };
     }
     if (operation === 'list-products') return listProducts(ctx);
+    if (operation === 'activate-product' || operation === 'deactivate-product') return setPlayProductState(operation, input, ctx, packageName(ctx), await authorization(ctx));
     if (operation === 'list-releases') return listReleases(input, ctx);
     if (operation === 'sync-app') {
       const products = await listProducts(ctx); const releases = await listReleases(input, ctx);
@@ -270,7 +171,7 @@ export const googlePlayConnector: Connector = {
       const earnings = await collectPlayEarnings(input, ctx);
       return { ...earnings, resources: [...(products.resources ?? []), ...(releases.resources ?? [])], summary: { ...products.summary, ...releases.summary, ...earnings.summary } };
     }
-    if (operation === 'create-product' || operation === 'update-product') return upsertProduct(operation, input, ctx);
+    if (operation === 'create-product' || operation === 'update-product') return upsertPlayProduct(operation, input, ctx, packageName(ctx), await authorization(ctx));
     if (operation === 'upload-build') return uploadBuild(input, ctx);
     if (operation === 'list-listings' || operation === 'update-listing' || operation === 'upload-listing-image' || operation === 'promote-release' || operation === 'create-app') {
       const pkg = packageName(ctx); const headers = await authorization(ctx);

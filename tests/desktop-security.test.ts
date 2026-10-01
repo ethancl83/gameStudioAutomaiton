@@ -78,6 +78,21 @@ test('새 경로도 메서드/구조가 다르면 거부한다', () => {
   assert.equal(isAllowedApiPath('GET', '/connections/c1/credentials'), false); // 저장값 조회 불가(메서드)
 });
 
+test('성장 운영 프로젝트 범위·결정 이력 페이지는 정확한 경로만 허용한다', () => {
+  assert.equal(isAllowedApiPath('GET', '/growth'), true); // 기존 전역 조회 호환
+  assert.equal(isAllowedApiPath('GET', '/growth/projects/p-1'), true);
+  assert.equal(isAllowedApiPath('GET', '/demo/growth/projects/p-1'), true);
+  assert.equal(isAllowedApiPath('POST', '/growth/decisions/query'), true);
+  assert.equal(isAllowedApiPath('GET', '/growth?projectId=p-1'), false); // query string 불가
+  assert.equal(isAllowedApiPath('GET', '/growth/projects/p-1?x=1'), false);
+  assert.equal(isAllowedApiPath('GET', '/growth/projects'), false); // 불완전 경로
+  assert.equal(isAllowedApiPath('GET', '/growth/projects/p-1/decisions'), false); // 여분 세그먼트
+  assert.equal(isAllowedApiPath('GET', '/growth/projects/..'), false);
+  assert.equal(isAllowedApiPath('POST', '/growth/projects/p-1'), false); // 메서드
+  assert.equal(isAllowedApiPath('GET', '/growth/decisions/query'), false);
+  assert.equal(isAllowedApiPath('POST', '/growth/decisions'), false);
+});
+
 test('메서드가 다르면 거부한다', () => {
   assert.equal(isAllowedApiPath('DELETE', '/state'), false);
   assert.equal(isAllowedApiPath('GET', '/projects/abc/build'), false);
@@ -211,4 +226,14 @@ test('mergeOperationFields는 externalId를 추가하지 않는다(root가 제�
   assert.ok(!base.some((f) => f.key === 'externalId'));
   const merged = mergeOperationFields(base, [{ key: 'status', required: true }]);
   assert.ok(!merged.some((f) => f.key === 'externalId'));
+});
+
+test('every API path the renderer client calls is allowed by the Electron boundary', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../apps/desktop/src/api.ts', import.meta.url), 'utf8');
+  const calls = [...source.matchAll(/request(?:<[^()]*?>)?\(\s*'(GET|POST|PUT|DELETE)',\s*[`'"]([^`'"]+)[`'"]/g)]
+    .map(([, method, path]) => [method!, path!.replace(/\$\{provider\}/g, 'x').replace(/\$\{[^}]+\}/g, 'fixture-1')] as const);
+  assert.ok(calls.length > 20, 'client calls were found');
+  const denied = calls.filter(([method, path]) => !isAllowedApiPath(method, path.split('?')[0]!));
+  assert.deepEqual(denied, []);
 });

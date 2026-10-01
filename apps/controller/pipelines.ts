@@ -87,7 +87,7 @@ export class ReleasePipelines {
     }
     if (!pipeline.buildRunId) {
       // Recover a crash after enqueuing the child but before publishing its pointer.
-      const found=this.store.runs(100_000).find(r=>r.kind==='build'&&r.input.pipelineId===pipeline.id);
+      const found=this.store.findRuns({ kinds: ['build'], pipelineId: pipeline.id })[0];
       const build=found??this.actions.build(pipeline.projectId,{...pipeline.input,target:pipeline.target},pipeline);
       pipeline=this.save(pipeline,{buildRunId:build.id,status:'building'});
     }

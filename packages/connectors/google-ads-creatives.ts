@@ -1,5 +1,6 @@
 import { AppError, text } from '../domain/errors.js';
 import { codePointLength, parseJsonArray } from './json-fields.js';
+import type { CreativeImage } from './creative-media.js';
 
 /**
  * App campaign AppAd assets.
@@ -13,6 +14,12 @@ import { codePointLength, parseJsonArray } from './json-fields.js';
  *   https://support.google.com/google-ads/answer/9948381
  * - ACE minimum: 2 headlines + 1 description
  *   https://support.google.com/google-ads/answer/9234183
+ * - Image upload (2026-09-24): AssetService `customers/{id}/assets:mutate` create with
+ *   `type=IMAGE`, `imageAsset.data`(base64 bytes, mutate only). Same content under another name
+ *   is deduplicated by Google and "the new name will be dropped silently".
+ *   https://developers.google.com/google-ads/api/docs/assets/working-with-assets
+ * - App campaign image spec: .jpg/.png, max 5MB; 1:1 min 200x200, 1.91:1 min 600x314, 4:5 min 320x400
+ *   https://support.google.com/google-ads/answer/9948381
  */
 
 export interface AppAdAssets {
@@ -36,7 +43,7 @@ export function parseAppAdAssets(input: Record<string, unknown>, required: boole
   const descriptions = parseJsonArray(input.descriptions, '설명', { max: 5 }).map((item, index) => boundedText(item, `설명 ${index + 1}`, 90));
   const imageAssetResourceNames = parseJsonArray(input.imageAssetResourceNames, '이미지 애셋 리소스', { max: 20 });
   for (const name of imageAssetResourceNames) {
-    if (!ASSET_NAME.test(name)) throw new AppError('INVALID_INPUT', '이미지 애셋은 customers/{id}/assets/{id} 형식이어야 합니다. 바이너리 업로드는 이 작업에서 하지 않습니다.');
+    if (!ASSET_NAME.test(name)) throw new AppError('INVALID_INPUT', '이미지 애셋은 customers/{id}/assets/{id} 형식이어야 합니다. 새 이미지는 mediaAssetId로 업로드합니다.');
   }
   const youtubeVideoIds = parseJsonArray(input.youtubeVideoIds, 'YouTube 동영상 ID', { max: 20 });
   for (const id of youtubeVideoIds) {
@@ -51,6 +58,35 @@ export function parseAppAdAssets(input: Record<string, unknown>, required: boole
     throw new AppError('CREATIVE_REQUIRED', 'App 광고는 헤드라인 2–5개(각 30자)와 설명 1–5개(각 90자)가 필요합니다.');
   }
   return { headlines, descriptions, imageAssetResourceNames, youtubeVideoIds };
+}
+
+/** Help 문서의 "5MB"를 5 MiB로 해석한다. 초과분은 Google이 거부하므로 전송 전에 막는다. */
+export const APP_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const APP_IMAGE_RATIOS = [
+  { label: '1:1', ratio: 1, minWidth: 200, minHeight: 200 },
+  { label: '1.91:1', ratio: 1.91, minWidth: 600, minHeight: 314 },
+  { label: '4:5', ratio: 0.8, minWidth: 320, minHeight: 400 },
+] as const;
+/** 비율 허용 오차. 공식 문서에 오차 규정이 없어 1200x628(1.9108) 같은 권장 크기를 받는 최소값으로 둔다. */
+const RATIO_TOLERANCE = 0.01;
+
+/** App 캠페인 이미지 형식·크기·비율 검사. 통과한 비율 이름을 돌려준다. */
+export function validateAppImage(image: Pick<CreativeImage, 'mime' | 'width' | 'height' | 'bytes'>): string {
+  if (image.mime !== 'image/png' && image.mime !== 'image/jpeg') throw new AppError('INVALID_IMAGE', 'Google Ads App 광고 이미지는 PNG 또는 JPEG만 허용합니다.');
+  if (image.bytes.length > APP_IMAGE_MAX_BYTES) throw new AppError('INVALID_IMAGE', `Google Ads App 광고 이미지는 ${APP_IMAGE_MAX_BYTES.toLocaleString('en-US')}바이트(5MB) 이하여야 합니다.`);
+  const ratio = image.width / image.height;
+  const spec = APP_IMAGE_RATIOS.find(item => Math.abs(ratio - item.ratio) / item.ratio <= RATIO_TOLERANCE);
+  if (!spec) throw new AppError('INVALID_IMAGE', `Google Ads App 광고 이미지 비율은 1:1, 1.91:1, 4:5 중 하나여야 합니다. 현재 ${image.width}x${image.height}입니다.`);
+  if (image.width < spec.minWidth || image.height < spec.minHeight) {
+    throw new AppError('INVALID_IMAGE', `${spec.label} 이미지는 최소 ${spec.minWidth}x${spec.minHeight}이어야 합니다. 현재 ${image.width}x${image.height}입니다.`);
+  }
+  return spec.label;
+}
+
+/** 응답 유실 뒤 같은 이미지를 이름으로 다시 찾기 위한 결정적 asset 이름. */
+export function appImageAssetName(sha256: string): string {
+  if (!/^[0-9a-f]{64}$/.test(sha256)) throw new AppError('INVALID_INPUT', '이미지 sha256을 확인할 수 없습니다.');
+  return `gso-image-${sha256}`;
 }
 
 export function appAdMeetsMinimum(ad: Record<string, unknown>): boolean {

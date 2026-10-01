@@ -150,7 +150,7 @@ export class BuildKeyManager {
     const key = this.store.get<BuildCredential>('build-credential', id);
     if (!key) throw new AppError('KEY_NOT_FOUND', '등록된 빌드 키를 찾을 수 없습니다.', 404);
     const bound = this.store.list<Project>('project').some(project => project.buildSecurity?.androidKeystoreId === id || project.buildSecurity?.sshDependencies.some(dependency => dependency.credentialId === id));
-    const active = this.store.runs(100_000).some(run => run.kind === 'build' && ['queued', 'running', 'retry_wait', 'waiting_external', 'action_required'].includes(run.status) && this.runReferences(run).some(reference => reference.id === id));
+    const active = this.store.findRuns({ kinds: ['build'], statuses: ['queued', 'running', 'retry_wait', 'waiting_external', 'action_required'] }).some(run => this.runReferences(run).some(reference => reference.id === id));
     if (bound || active) throw new AppError('BUILD_KEY_IN_USE', '프로젝트 또는 진행 중인 빌드가 사용하는 키입니다. 프로젝트 연결을 해제하고 작업 종료 후 삭제해 주세요.', 409);
     this.store.put('build-credential', id, { ...key, details: { ...key.details, deleting: 'true' } });
     const ids = new Set((await this.vault.listIds()).filter(value => value.startsWith(`build-key-${id}-v`)));

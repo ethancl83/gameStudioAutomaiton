@@ -8,7 +8,7 @@ import { useAction } from '../useAction';
 import { RunStatusBadge } from './status';
 import { Field, Modal, Notice, Spinner } from './ui';
 import type { AppState, Run, TimelineEvent } from '../../../../packages/domain';
-import { isWriteOperation } from '../../../../packages/connectors/types';
+import { isWriteOperation } from '../../../../packages/domain/operations';
 
 function levelToStream(level: TimelineEvent['level']): string {
   if (level === 'error') return 'logline__stderr';

@@ -80,7 +80,7 @@ test('context copies only permitted source, excludes secrets and data, and refus
   const directory = await fixture();t.after(() => rm(directory, {recursive:true,force:true}));
   const files = ['apps/runner/remote-main.ts', 'apps/runner/.env', 'apps/runner/.env.local',
     'apps/runner/node_modules/rogue.ts', 'apps/runner/tmp/secret.ts', 'apps/runner/.git/config',
-    'apps/runner/vault/key.ts', 'packages/domain/index.ts', 'packages/credentials/key.pem',
+    'apps/runner/vault/key.ts', 'packages/domain/index.ts', 'packages/runner/execute.ts', 'packages/runner/secrets.ts', 'packages/runner/.env', 'packages/runner/data/key.ts', 'packages/credentials/key.pem',
     'apps/controller/service.ts', 'tmp/secret.ts', '.env', 'private.key'];
   for (const path of files) {
     await mkdir(dirname(join(directory, path)), {recursive:true});
@@ -90,7 +90,13 @@ test('context copies only permitted source, excludes secrets and data, and refus
   const copied=await prepareRunnerContext(directory,destination);
   assert.ok(copied.includes('apps/runner/remote-main.ts'));
   assert.ok(copied.includes('packages/domain/index.ts'));
-  for (const path of files.filter(path=>!['apps/runner/remote-main.ts','packages/domain/index.ts'].includes(path))) assert.ok(!copied.includes(path), path);
+  assert.ok(copied.includes('packages/runner/execute.ts'));
+  assert.ok(copied.includes('packages/runner/secrets.ts'));
+  const ignore = await source('.dockerignore');
+  assert.ok(ignore.split('\n').includes('!packages/runner/'));
+  assert.ok(ignore.split('\n').includes('!packages/runner/**/*.ts'));
+  assert.ok(!ignore.includes('!apps/controller/'));
+  for (const path of files.filter(path=>!['apps/runner/remote-main.ts','packages/domain/index.ts','packages/runner/execute.ts','packages/runner/secrets.ts'].includes(path))) assert.ok(!copied.includes(path), path);
   assert.equal(await readFile(join(destination,'apps/runner/remote-main.ts'),'utf8'),'apps/runner/remote-main.ts');
   await assert.rejects(prepareRunnerContext(directory,destination),{code:'EEXIST'});
   assert.deepEqual((await readdir(join(destination,'apps/runner'))).sort(),['remote-main.ts']);

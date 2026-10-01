@@ -6,9 +6,9 @@
 !apps/
 !apps/runner/
 !apps/runner/**/*.ts
-!apps/controller/
-!apps/controller/validation.ts
 !packages/
+!packages/runner/
+!packages/runner/**/*.ts
 !packages/build-credentials/
 !packages/build-credentials/**/*.ts
 !packages/domain/

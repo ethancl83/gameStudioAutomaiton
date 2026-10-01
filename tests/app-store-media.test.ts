@@ -336,5 +336,6 @@ test('Apple capability lists upload-listing-image and screenshot display types',
   const fields = appStoreConnector.capability.operationFields?.['upload-listing-image'] ?? [];
   assert.ok(fields.some(item => item.key === 'screenshotDisplayType' && item.required));
   assert.ok(fields.some(item => item.key === 'appStoreVersionId' && item.required));
-  assert.ok(!appStoreConnector.capability.operations.includes('upload-app-preview'));
+  // App Preview videos use their own operation (tests/store-gaps.test.ts); screenshots stay image-only.
+  assert.ok(appStoreConnector.capability.operations.includes('upload-app-preview'));
 });

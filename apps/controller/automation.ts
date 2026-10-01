@@ -3,8 +3,8 @@ import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Connection, Project, Run } from '../../packages/domain/index.js';
 import type { Store } from '../../packages/storage/index.js';
-import { isExcludedDirectory } from '../runner/excludes.js';
-import { isSecretFile } from '../runner/secrets.js';
+import { isExcludedDirectory } from '../../packages/runner/excludes.js';
+import { isSecretFile } from '../../packages/runner/secrets.js';
 
 export interface AutomationActions {
   build(projectId: string, input: unknown): Run;
@@ -12,6 +12,7 @@ export interface AutomationActions {
   reconcile(runId: string): Run;
   supported(provider: Connection['provider'], operation: string): boolean;
   socialCycle?(): void;
+  growthCycle?(): Promise<void> | void;
 }
 const pending = new Set(['queued', 'running', 'retry_wait']);
 export async function projectFingerprint(root: string): Promise<string> {
@@ -53,15 +54,18 @@ export class AutomationScheduler {
   private stamp(key: string): number { return this.store.get<{ at: number }>('settings', key)?.at ?? 0; }
   private setStamp(key: string): void { this.store.put('settings', key, { at: this.clock() }); }
   private async cycle(): Promise<void> {
-    this.actions.socialCycle?.();
+    // 장비 이전 뒤 원래 장비는 외부 쓰기를 만드는 자동화를 멈추고 조회·결과 확인만 계속한다.
+    const transferred = Boolean(this.store.get('settings', 'device-transferred'));
+    if (!transferred) this.actions.socialCycle?.();
+    // 성장 주기는 AI 분류로 오래 걸릴 수 있어 계정 동기화를 막지 않도록 분리한다. 중지는 GrowthOperations.stop이 기다린다.
+    if (!transferred) void this.actions.growthCycle?.();
     const projects = this.store.list<Project>('project');
     for (const project of projects) {
       if (this.stopped) return;
-      if (project.relinkRequired) continue;
+      if (project.relinkRequired || transferred) continue;
       if (project.policy.autoBuild) await this.scanProject(project);
       if (project.policy.autoRelease) this.releaseBuilds(project);
     }
-    const runs = this.store.runs(10_000);
     for (const connection of this.store.list<Connection>('connection')) {
       if (this.stopped) return;
       if (!['connected', 'recovering', 'unverified'].includes(connection.status)) continue;
@@ -71,21 +75,21 @@ export class AutomationScheduler {
           const mapping = project.storeApps?.[connection.provider as 'google-play'|'app-store'|'steam'];
           if (mapping ? mapping.connectionId !== connection.id : !project.appIdentifier || !project.policy.allowedConnectionIds.includes(connection.id)) continue;
           const key = 'auto-app-sync:' + connection.id + ':' + project.id;
-          const recentRelease=runs.some(r=>r.connectionId===connection.id&&r.projectId===project.id&&['upload-build','promote-release','release-version','set-live'].includes(r.kind)&&!['failed','cancelled'].includes(r.status)&&Date.parse(r.updatedAt)>this.clock()-86_400_000);
-          if (this.clock() - this.stamp(key) < (recentRelease?60_000:interval) || runs.some(r => r.connectionId === connection.id && r.projectId === project.id && r.kind === 'sync-app' && pending.has(r.status))) continue;
+          const recentRelease=this.store.hasRuns({ connectionId: connection.id, projectId: project.id, kinds: ['upload-build','promote-release','release-version','set-live'], statuses: ['queued','running','retry_wait','waiting_external','action_required','succeeded'], updatedSince: new Date(this.clock()-86_400_000).toISOString() });
+          if (this.clock() - this.stamp(key) < (recentRelease?60_000:interval) || this.store.hasRuns({ connectionId: connection.id, projectId: project.id, kinds: ['sync-app'], statuses: [...pending] })) continue;
           try { this.actions.action(connection.id, {operation:'sync-app',projectId:project.id,input:{}}); this.setStamp(key); }
           catch (error) { this.store.addEvent({projectId:project.id,kind:'automation.sync_error',message:error instanceof Error ? error.message : '앱 동기화를 예약하지 못했습니다.',level:'warning'}); }
         }
       }
       if (!this.actions.supported(connection.provider, 'sync')) continue;
       const key = 'auto-sync:' + connection.id;
-      if (this.clock() - this.stamp(key) < interval || runs.some(r => r.connectionId === connection.id && pending.has(r.status))) continue;
+      if (this.clock() - this.stamp(key) < interval || this.store.hasRuns({ connectionId: connection.id, statuses: [...pending] })) continue;
       this.actions.action(connection.id, { operation: 'sync', input: {} }); this.setStamp(key);
     }
-    for (const run of runs.filter(r => ['upload-build', 'submit-review', 'set-live'].includes(r.kind) && r.status === 'waiting_external')) {
+    for (const run of this.store.findRuns({ kinds: ['upload-build', 'submit-review', 'set-live', 'create-experiment', 'promote-experiment', 'upload-app-preview'], statuses: ['waiting_external'] })) {
       if (this.stopped) return;
       const key = 'auto-reconcile:' + run.id;
-      if (this.clock() - this.stamp(key) < 60_000 || runs.some(r => r.kind === 'reconcile' && r.input.targetRunId === run.id && pending.has(r.status))) continue;
+      if (this.clock() - this.stamp(key) < 60_000 || this.store.hasRuns({ kinds: ['reconcile'], targetRunId: run.id, statuses: [...pending] })) continue;
       try { this.actions.reconcile(run.id); this.setStamp(key); } catch {}
     }
   }
@@ -93,7 +97,7 @@ export class AutomationScheduler {
     const key = 'watch:' + project.id;
     const previous = this.store.get<{ fingerprint: string; candidate?: string; candidateAt?: number; error?: string }>('settings', key);
     try {
-      if (this.store.runs(10_000).some(run => run.projectId === project.id && run.kind === 'build' && pending.has(run.status))) return;
+      if (this.store.hasRuns({ projectId: project.id, kinds: ['build'], statuses: [...pending] })) return;
       const fingerprint = await projectFingerprint(project.rootPath);
       if (this.stopped) return;
       if (previous?.fingerprint === fingerprint) return;
@@ -117,7 +121,7 @@ export class AutomationScheduler {
   private releaseBuilds(project: Project): void {
     const latest = new Map<string, Run>();
     const enabledAt = this.stamp('auto-release-since:' + project.id);
-    for (const run of this.store.runs(10_000)) {
+    for (const run of this.store.findRuns({ projectId: project.id, kinds: ['build'], statuses: ['succeeded'], finishedSince: new Date(enabledAt).toISOString() })) {
       if (run.projectId === project.id && run.kind === 'build' && !run.input.pipelineId && run.status === 'succeeded' && Date.parse(run.finishedAt ?? run.createdAt) >= enabledAt && !latest.has(String(run.result?.target))) latest.set(String(run.result?.target), run);
     }
     for (const [target, build] of latest) {

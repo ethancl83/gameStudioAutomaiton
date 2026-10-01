@@ -1,6 +1,7 @@
 import { AppError, text } from '../domain/errors.js';
 import type { Capability } from '../domain/index.js';
 import { decimalToMicros, parseGzipTsv, readFileSlice, readIpaMetadata } from './store-tools.js';
+import { findExactPricePoint, microsInput, resolveTerritoryForCurrency } from './apple-pricing.js';
 import type { Connector, ConnectorContext, ConnectorResult, MetricInput, ResourceInput } from './types.js';
 import {
   APP_STORE_API as API, appleAuthHeaders as authHeaders, attribute, many, one,
@@ -12,16 +13,14 @@ import {
   submitAppleReview, updateAppleAppInfo, updateAppleListing,
 } from './store-apple-ops.js';
 import { APPLE_SCREENSHOT_DISPLAY_TYPES, reconcileAppleScreenshot, uploadAppleScreenshot } from './apple-media.js';
+import { APPLE_PREVIEW_TYPES, reconcileApplePreview, uploadApplePreview } from './apple-previews.js';
+import {
+  createAppleSubscription, isAppleSubscriptionId, listAppleSubscriptions, submitAppleProduct, updateAppleSubscriptionPrice,
+} from './apple-subscriptions.js';
+import { collectAppleFinance } from './apple-finance.js';
 
 // Official host. Binary build parts are PUT to the exact URLs Apple returns in
 // uploadOperations[]; the transport pins those per operation (coordinator contract).
-
-// Preferred base territory per currency, used only to break ties among the
-// territories the official /v1/territories metadata reports for a currency.
-// The API metadata is authoritative; nothing silently falls back to USD.
-const PREFERRED_TERRITORIES: Record<string, string> = {
-  USD: 'USA', EUR: 'DEU', GBP: 'GBR', JPY: 'JPN', KRW: 'KOR', CAD: 'CAN', AUD: 'AUS', CNY: 'CHN', BRL: 'BRA', INR: 'IND',
-};
 
 const PRODUCT_TYPES: Record<string, string> = {
   consumable: 'CONSUMABLE',
@@ -226,78 +225,18 @@ async function reconcileBuildUpload(input: Record<string, unknown>, context: Con
   };
 }
 
-/**
- * Requires an exact Apple price point for the requested amount. Apple prices
- * are a fixed grid, and silently charging a different price than the user
- * asked for is never acceptable — a miss returns PRICE_POINT_REQUIRED with
- * the nearest available amounts so the user can pick one deliberately.
- */
-async function findExactPricePoint(
-  context: ConnectorContext,
-  inAppPurchaseId: string,
-  territory: string,
-  priceMicros: bigint,
-): Promise<{ id: string; customerPrice: string }> {
-  const headers = await authHeaders(context);
-  let url = `${API}/v2/inAppPurchases/${encodeURIComponent(inAppPurchaseId)}/pricePoints?filter[territory]=${encodeURIComponent(territory)}&limit=200`;
-  let nearestBelow: { customerPrice: string; micros: bigint } | undefined;
-  let nearestAbove: { customerPrice: string; micros: bigint } | undefined;
-  let sawAny = false;
-  for (let page = 0; page < 8 && url; page += 1) {
-    const document = await context.request<JsonApiDocument>(url, { headers });
-    for (const point of many(document)) {
-      const customerPrice = textAttribute(point, 'customerPrice');
-      if (!customerPrice) continue;
-      sawAny = true;
-      const micros = decimalToMicros(customerPrice);
-      if (micros === priceMicros) return { id: point.id, customerPrice };
-      if (micros < priceMicros && (!nearestBelow || micros > nearestBelow.micros)) nearestBelow = { customerPrice, micros };
-      if (micros > priceMicros && (!nearestAbove || micros < nearestAbove.micros)) nearestAbove = { customerPrice, micros };
-    }
-    url = document.links?.next ?? '';
-  }
-  if (!sawAny) {
-    throw new AppError('RESOURCE_NOT_FOUND', `${territory} 지역의 가격 포인트를 조회하지 못했습니다.`, 404);
-  }
-  const candidates = [nearestBelow?.customerPrice, nearestAbove?.customerPrice].filter(Boolean).join(', ');
-  throw new AppError(
-    'PRICE_POINT_REQUIRED',
-    `요청한 금액(${priceMicros.toString()} micros)에 해당하는 Apple 가격 포인트가 ${territory} 지역에 없습니다. 가장 가까운 사용 가능 금액: ${candidates}. 이 중 하나로 다시 요청해 주세요.`,
-    422,
-    {
-      territory,
-      requestedMicros: priceMicros.toString(),
-      nearestBelow: nearestBelow?.customerPrice ?? null,
-      nearestAbove: nearestAbove?.customerPrice ?? null,
-    },
-  );
-}
-
-/**
- * Resolves the base territory for a currency from the official
- * /v1/territories metadata (each territory carries its currency). There is
- * no static default: an unknown currency fails with the actual options.
- */
-async function resolveTerritoryForCurrency(context: ConnectorContext, currency: string): Promise<string> {
-  const document = await context.request<JsonApiDocument>(`${API}/v1/territories?limit=200`, { headers: await authHeaders(context) });
-  const matching = many(document)
-    .filter(territory => textAttribute(territory, 'currency') === currency)
-    .map(territory => territory.id)
-    .sort();
-  if (matching.length === 0) {
-    throw new AppError('INVALID_INPUT', `App Store 지역 메타데이터에서 통화 ${currency}를 쓰는 지역을 찾지 못했습니다. 지원 통화로 다시 요청해 주세요.`);
-  }
-  const preferred = PREFERRED_TERRITORIES[currency];
-  return preferred && matching.includes(preferred) ? preferred : matching[0];
-}
-
 async function applyPriceSchedule(
   context: ConnectorContext,
   inAppPurchaseId: string,
   territory: string,
   priceMicros: bigint,
 ): Promise<{ customerPrice: string }> {
-  const point = await findExactPricePoint(context, inAppPurchaseId, territory, priceMicros);
+  const point = await findExactPricePoint(
+    context,
+    `${API}/v2/inAppPurchases/${encodeURIComponent(inAppPurchaseId)}/pricePoints?filter[territory]=${encodeURIComponent(territory)}&limit=200`,
+    territory,
+    priceMicros,
+  );
   await context.request<JsonApiDocument>(`${API}/v1/inAppPurchasePriceSchedules`, {
     method: 'POST',
     headers: await authHeaders(context),
@@ -325,12 +264,6 @@ async function applyPriceSchedule(
     },
   });
   return { customerPrice: point.customerPrice };
-}
-
-function microsInput(value: unknown): bigint {
-  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
-  if (typeof value === 'string' && /^\d{1,30}$/.test(value)) return BigInt(value);
-  throw new AppError('INVALID_INPUT', 'priceMicros는 0 이상의 정수여야 합니다.');
 }
 
 async function createProduct(input: Record<string, unknown>, context: ConnectorContext): Promise<ConnectorResult> {
@@ -402,7 +335,7 @@ async function createProduct(input: Record<string, unknown>, context: ConnectorC
 async function updateProduct(input: Record<string, unknown>, context: ConnectorContext): Promise<ConnectorResult> {
   const inAppPurchaseId = text(input.externalId, 'externalId', 200);
   if (input.status !== undefined) {
-    throw new AppError('UNSUPPORTED_OPERATION', 'Apple 인앱 상품의 상태 전환은 심사 제출 절차를 통해서만 진행됩니다. 이 작업에서는 지원하지 않습니다.');
+    throw new AppError('UNSUPPORTED_OPERATION', 'Apple 인앱 상품의 상태 전환은 심사 제출 절차를 통해서만 진행됩니다. submit-product 작업으로 심사에 제출해 주세요.');
   }
   if (input.priceMicros === undefined) {
     throw new AppError('INVALID_INPUT', '변경할 항목이 없습니다. priceMicros를 지정해 주세요.');
@@ -469,9 +402,11 @@ async function listProducts(context: ConnectorContext): Promise<ConnectorResult>
     externalId: item.id,
     name: textAttribute(item, 'name') || textAttribute(item, 'productId'),
     status: textAttribute(item, 'state') || 'UNKNOWN',
-    data: { bundleId: app.bundleId, productId: textAttribute(item, 'productId'), type: textAttribute(item, 'inAppPurchaseType') },
+    data: { bundleId: app.bundleId, productId: textAttribute(item, 'productId'), productType: 'in-app', type: textAttribute(item, 'inAppPurchaseType') },
   }));
-  return { summary: { app: app.bundleId, products: resources.length }, resources };
+  const subscriptions = await listAppleSubscriptions(context, app);
+  resources.push(...subscriptions);
+  return { summary: { app: app.bundleId, products: resources.length, subscriptions: subscriptions.length }, resources };
 }
 
 async function listReleases(context: ConnectorContext): Promise<ConnectorResult> {
@@ -517,7 +452,7 @@ async function listApps(context: ConnectorContext): Promise<ConnectorResult> {
   return { summary: { apps, count: apps.length } };
 }
 
-async function syncSales(context: ConnectorContext): Promise<ConnectorResult> {
+async function syncSales(input: Record<string, unknown>, context: ConnectorContext): Promise<ConnectorResult> {
   const vendorNumber = context.credentials.vendorNumber;
   if (!vendorNumber) {
     throw new AppError('MISSING_REQUIREMENT', '매출 수집에는 App Store Connect 지급 화면의 vendor number가 필요합니다. 연결 설정에 vendorNumber를 추가해 주세요.');
@@ -565,13 +500,16 @@ async function syncSales(context: ConnectorContext): Promise<ConnectorResult> {
     }
     collectedDates.push(date);
   }
+  const finance = await collectAppleFinance(input, context, vendorNumber);
   return {
     summary: {
       collectedDates,
       missingDates,
-      note: '일별 SALES SUMMARY 보고서의 Developer Proceeds 합계입니다. 최근 날짜는 Apple 측 생성 지연으로 비어 있을 수 있습니다.',
+      note: '일별 SALES SUMMARY 보고서의 Developer Proceeds 합계(proceeds)와 월별 FINANCIAL 정산 보고서(settled)를 별도 sourceId로 수집합니다. 같은 기간을 합산하지 말고 정산값을 우선해야 합니다.',
+      ...finance.summary,
     },
-    metrics,
+    metrics: [...metrics, ...(finance.metrics ?? [])],
+    metricSourcePrefixes: finance.metricSourcePrefixes,
   };
 }
 
@@ -591,7 +529,7 @@ const capability: Capability = {
   provider: 'app-store',
   name: 'App Store Connect',
   category: 'store',
-  description: 'App Store Connect API 키로 앱 조회, iOS 빌드 업로드(TestFlight 처리), 스토어 자료·심사·출시, 인앱 상품 관리, 일별 매출 수집을 수행합니다.',
+  description: 'App Store Connect API 키로 앱 조회, iOS 빌드 업로드(TestFlight 처리), 스토어 자료·스크린샷·미리보기 동영상·심사·출시, 인앱 상품·자동 갱신 구독 관리, 일별 매출과 월별 정산 수집을 수행합니다.',
   authKind: 'api-key-jwt',
   operationFields: {
     'create-product': [
@@ -599,7 +537,26 @@ const capability: Capability = {
       { key: 'billingPeriod', remove: true }, { key: 'description', remove: true }, { key: 'language', remove: true }, { key: 'country', remove: true },
       { key: 'priceMicros', hint: '통화에 맞는 기준 지역에서 정확히 일치하는 Apple 가격 포인트를 사용합니다.' },
     ],
-    'update-product': [{ key: 'priceMicros', required: true, hint: '기존 상품의 기준 통화와 같은 통화를 선택해 주세요.' }, { key: 'status', remove: true }, { key: 'description', remove: true }],
+    'update-product': [{ key: 'priceMicros', required: true, hint: '인앱 상품은 기존 기준 통화와 같은 통화, 자동 갱신 구독은 가격을 바꿀 지역의 통화를 선택합니다.' }, { key: 'status', remove: true }, { key: 'description', remove: true }],
+    'create-subscription': [
+      { key: 'subscriptionGroup', label: '구독 그룹 참조 이름', required: true, hint: '같은 참조 이름의 그룹이 있으면 재사용하고 없으면 만듭니다.' },
+      { key: 'productId', label: '상품 ID', required: true, placeholder: 'com.company.app.premium.monthly' },
+      { key: 'name', label: '참조 이름', required: true, hint: '최대 64자. App Store Connect 내부 표시용입니다.' },
+      { key: 'billingPeriod', label: '구독 기간', type: 'select', required: true, options: [
+        { value: 'P1W', label: '1주' }, { value: 'P1M', label: '1개월' }, { value: 'P2M', label: '2개월' },
+        { value: 'P3M', label: '3개월' }, { value: 'P6M', label: '6개월' }, { value: 'P1Y', label: '1년' },
+      ] },
+      { key: 'priceMicros', label: '가격', type: 'money', required: true, hint: '통화의 기준 지역에서 정확히 일치하는 Apple 가격 포인트만 사용합니다.' },
+    ],
+    'submit-product': [{ key: 'priceMicros', remove: true }, { key: 'status', remove: true }, { key: 'description', remove: true }],
+    'upload-app-preview': [
+      { key: 'appStoreVersionId', label: '앱 스토어 버전 ID', required: true, hint: 'list-releases에서 확인한 정확한 버전 ID입니다.' },
+      { key: 'locale', label: '로케일', required: true, placeholder: 'ko', hint: '해당 현지화가 있어야 합니다.' },
+      { key: 'previewType', label: '미리보기 유형', type: 'select', required: true, options: APPLE_PREVIEW_TYPES.map(value => ({ value, label: value })), hint: '.mov/.m4v/.mp4, 500MB 이하, 15–30초, 기기 유형별 최대 3개. 컨트롤러가 검증한 프로젝트 동영상만 사용합니다.' },
+      { key: 'previewFrameTimeCode', label: '포스터 프레임 (선택)', placeholder: '00:00:05:00', hint: '비우면 Apple 기본값(5초)을 사용합니다.' },
+      { key: 'localizationId', label: '현지화 ID (선택)', hint: '있으면 소유권을 확인합니다. 없으면 버전+로케일로 찾습니다.' },
+    ],
+    'sync': [{ key: 'financeMonth', label: '정산 보고서 월 (선택)', placeholder: '2026-08', hint: 'Apple 회계 월(YYYY-MM)입니다. 비우면 최근 3개월을 다시 수집해 같은 월의 정산값을 교체합니다.' }],
     'list-listings': [{ key: 'appStoreVersionId', label: '앱 스토어 버전 ID', hint: '비우면 최근 버전의 현지화를 모두 조회합니다. 정확한 버전 ID를 권장합니다.' }],
     'upload-listing-image': [
       { key: 'appStoreVersionId', label: '앱 스토어 버전 ID', required: true, hint: 'list-releases에서 확인한 정확한 버전 ID입니다.' },
@@ -682,16 +639,20 @@ const capability: Capability = {
     'create-app', 'create-version', 'list-listings', 'update-listing', 'upload-listing-image', 'update-app-info',
     'list-beta-groups', 'create-beta-group', 'distribute-build', 'link-build',
     'submit-review', 'list-review-submissions', 'release-version',
+    'create-subscription', 'submit-product', 'upload-app-preview',
   ],
   setupUrl: 'https://appstoreconnect.apple.com/access/integrations/api',
   limitations: [
     'iOS .ipa 업로드만 지원합니다. macOS .pkg 업로드는 아직 지원하지 않습니다.',
     '업로드 후 Apple 처리(waitingExternal)가 끝나야 TestFlight에 나타납니다.',
-    '앱 레코드 생성은 OpenAPI 4.4.1에 없어 App Store Connect에서 직접 만들어야 합니다.',
+    '앱 레코드 생성(POST /v1/apps)은 OpenAPI 4.5에도 없어 App Store Connect에서 직접 만들어야 합니다.',
     '심사 제출·출시·TestFlight 배포는 정확한 appStoreVersionId·buildId·betaGroupId가 필요합니다.',
-    '스크린샷은 upload-listing-image로 PNG/JPEG만 올립니다. App Preview 동영상(appPreviews)은 지원하지 않습니다. 처리 중이면 appScreenshotId로 reconcile 합니다.',
-    '인앱 상품 가격은 요청 금액과 정확히 일치하는 Apple 가격 포인트가 있어야 설정됩니다. 불일치 시 사용 가능한 금액을 안내합니다. 인앱 상품 상태 전환은 지원하지 않습니다.',
-    '실계정 검증 전입니다. 요청·응답 형식은 공식 OpenAPI 명세(4.4.1)로 검증했습니다.',
+    '스크린샷은 upload-listing-image(PNG/JPEG), App Preview 동영상은 upload-app-preview(.mov/.m4v/.mp4, 500MB 이하)로 올립니다. 처리 중이면 appScreenshotId 또는 appPreviewId로 reconcile 합니다. 동영상 길이(15–30초)·해상도·코덱은 업로드 전에 검사하지 않고 Apple 처리 결과(videoDeliveryState)로 판정합니다.',
+    '인앱 상품·구독 가격은 요청 금액과 정확히 일치하는 Apple 가격 포인트가 있어야 설정됩니다. 불일치 시 사용 가능한 금액을 안내합니다. 판매 상태는 submit-product(심사 제출)로만 전환합니다.',
+    '자동 갱신 구독은 기준 지역 1곳의 가격만 설정합니다. 다른 지역 가격·구독/그룹 현지화·심사 스크린샷은 App Store Connect에서 채워야 READY_TO_SUBMIT이 됩니다. 가격 변경은 기본적으로 기존 구독자 가격을 유지(preserveCurrentPrice)합니다.',
+    '첫 인앱 상품·구독은 Apple 정책상 새 앱 버전과 함께 심사에 제출해야 할 수 있습니다. submit-product는 READY_TO_SUBMIT 상태의 상품만 제출합니다.',
+    '월별 정산(financeReports FINANCIAL·ZZ)은 Finance 역할 키가 필요합니다. 정산값(settled)은 일별 매출(proceeds)과 다른 sourceId(apple-finance:)로 저장되며, 합계에서는 같은 기간의 정산값을 우선해야 합니다. 권한이 없으면 financeStatus=permission_required로 표시하고 일별 매출만 수집합니다.',
+    '실계정 검증 전입니다. 요청·응답 형식은 공식 OpenAPI 명세(4.5, 2026-09-24 확인)로 검증했습니다. 포스터 프레임 타임코드 형식은 공식 문서에서 확인하지 못해 HH:MM:SS(:FF)만 허용합니다.',
   ],
 };
 
@@ -710,9 +671,15 @@ export const appStoreConnector: Connector = {
       case 'upload-build': return uploadBuild(input, context);
       case 'reconcile':
         if (input.appScreenshotId) return reconcileAppleScreenshot(input, context);
+        if (input.appPreviewId) return reconcileApplePreview(input, context);
         return input.reviewSubmissionId ? reconcileAppleReview(input, context) : reconcileBuildUpload(input, context);
       case 'create-product': return createProduct(input, context);
-      case 'update-product': return updateProduct(input, context);
+      case 'update-product':
+        if (input.status === undefined && isAppleSubscriptionId(input.externalId)) return updateAppleSubscriptionPrice(input, context);
+        return updateProduct(input, context);
+      case 'create-subscription': return createAppleSubscription(input, context);
+      case 'submit-product': return submitAppleProduct(input, context);
+      case 'upload-app-preview': return uploadApplePreview(input, context);
       case 'create-app': return prepareAppleApp(context);
       case 'create-version': return createAppleVersion(input, context);
       case 'list-listings': return listAppleListings(input, context);
@@ -726,7 +693,7 @@ export const appStoreConnector: Connector = {
       case 'submit-review': return submitAppleReview(input, context);
       case 'list-review-submissions': return listAppleReviewSubmissions(input, context);
       case 'release-version': return releaseAppleVersion(input, context);
-      case 'sync': return syncSales(context);
+      case 'sync': return syncSales(input, context);
       default:
         throw new AppError('UNSUPPORTED_OPERATION', `App Store 연결이 지원하지 않는 작업입니다: ${operation}`);
     }

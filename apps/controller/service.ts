@@ -3,7 +3,7 @@ import { GOOGLE_OAUTH_APP_ID, OAUTH_PROVIDERS, oauthCredentials, resolveOAuthCli
 import { createHash, randomUUID } from 'node:crypto';
 import { PortableBackups } from './portable-backups.js';
 import { importArtifact, importedArtifactPath, assertArtifactApp } from './imported-artifacts.js';
-import { observeReleases } from './release-observations.js';
+import { persistResult } from './results.js';
 import { createReadStream } from 'node:fs';
 import { chmod, cp, lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises';
 import { basename, join, relative, dirname } from 'node:path';
@@ -14,15 +14,16 @@ import { Store } from '../../packages/storage/index.js';
 import { resolveProjectRoot } from '../../packages/inspection/discover.js';
 import { inspectProject } from '../../packages/inspection/index.js';
 import { createBuildPlan, scanToolchains } from '../../packages/engines/index.js';
-import { createSnapshot, executeBuild } from '../runner/index.js';
+import { createSnapshot, executeBuild } from '../../packages/runner/index.js';
 import { connectors as builtinConnectors } from '../../packages/connectors/index.js';
 import { createTransport } from '../../packages/connectors/transport.js';
 import { resolveAppleApp } from '../../packages/connectors/store-jsonapi.js';
 import { isWriteOperation, type Connector, type ConnectorContext, type ConnectorResult, type VerifiedArtifact } from '../../packages/connectors/types.js';
 import { summarizeMetrics } from '../../packages/metrics/index.js';
-import { enforceCampaignBudget } from './campaign-budget.js';
+import { enforceCampaignBudget, enforceReleasedForAds } from './campaign-budget.js';
+import { enforcePolicy, policyValue } from './policy.js';
 import { JobQueue, type ExecutionContext } from './queue.js';
-import { credentialValues, enforcePolicy, normalizeError, policyValue, providerValue, targetValue, within } from './validation.js';
+import { credentialValues, normalizeError, providerValue, targetValue, within } from './validation.js';
 import { AutomationScheduler } from './automation.js';
 import { BuildKeyManager, type BuildSecuritySelection } from '../../packages/build-credentials/index.js';
 import { buildInputHash, prepareSshDependencies, signAndroidArtifact } from '../../packages/build-credentials/build.js';
@@ -35,6 +36,11 @@ import { addMedia, mediaArtifact } from './media.js';
 import { Preparation } from './preparation.js';
 import { ProjectIntegrations } from './project-integrations.js';
 import { ProjectAgent, type AgentOptions } from './agent.js';
+import { GrowthOperations } from './growth.js';
+import { runStructuredCli } from '../../packages/agent/structured-cli.js';
+import { discoverAgentRuntimes } from '../../packages/agent/cli.js';
+import { agentChoice } from '../../packages/agent/settings.js';
+import { listProjectFiles, readProjectFile } from '../../packages/agent/project-files.js';
 
 const now = () => new Date().toISOString();
 const activeStatuses = new Set(['queued', 'running', 'retry_wait']);
@@ -63,6 +69,7 @@ export class AppService {
   readonly scheduler: AutomationScheduler;
   readonly buildKeys: BuildKeyManager;
   readonly social: SocialAutomation;
+  readonly growth: GrowthOperations;
   readonly pipelines: ReleasePipelines;
   readonly operations: Operations;
   readonly startedAt = now();
@@ -89,7 +96,7 @@ export class AppService {
     if(this.maintenance||this.mutations>1||this.locks.size||this.queue.activeCount||this.agent.busy||this.development.busy||this.store.list<Project>('project').some(p=>this.integrations.isBusy(p.id))||this.preparation.isInstalling())throw new AppError('MAINTENANCE_BUSY','진행 중인 작업이나 설치가 끝난 뒤 백업·복구를 시작해 주세요.',409);
     this.maintenance=true;this.queue.pause();this.pipelines.stop();
     let keep=false;
-    try{await this.scheduler.stop();await this.operations.stop();const result=await task();keep=retain;return result;}
+    try{await this.scheduler.stop();await this.growth.stop();await this.operations.stop();const result=await task();keep=retain;return result;}
     finally{if(!keep&&!this.closing){this.maintenance=false;this.queue.start();this.pipelines.start();this.operations.start();this.scheduler.start();}}
   }
 
@@ -113,8 +120,12 @@ export class AppService {
     this.queue = new JobQueue(store, (run, context) => this.execute(run, context));
     this.pipelines = new ReleasePipelines(store, { build: (id, input, pipeline) => this.build(id, input, pipeline), action: (id, input, pipeline) => this.action(id, input, pipeline), inspect: id => this.inspect(id), cancel: id => this.queue.cancel(id) });
     this.social = new SocialAutomation(store, { action: (id, input) => this.action(id, input), supported: (provider, operation) => this.connectors.some(c => c.capability.provider === provider && c.capability.operations.includes(operation)) });
+    this.growth = new GrowthOperations(store, { mode: options.mode ?? 'live', action: (id, input, mutate) => this.action(id, input, undefined, mutate), cancel: id => { this.queue.cancel(id); },
+      supported: (provider, operation) => this.connectors.some(c => c.capability.provider === provider && c.capability.operations.includes(operation)),
+      classify: options.mode === 'demo' ? undefined : (prompt, signal) => this.classifyCommunity(prompt, signal),
+      projectFiles: project => this.knowledgeFiles(project), agentListing: id => this.agent.tasks().find(task => task.projectId === id && task.listing)?.listing });
     this.scheduler = new AutomationScheduler(store, { build: (id, input) => this.build(id, input), action: (id, input) => this.action(id, input),
-      reconcile: id => this.reconcile(id), socialCycle: () => this.social.cycle(), supported: (provider, operation) => this.connectors.some(c => c.capability.provider === provider && c.capability.operations.includes(operation)) });
+      reconcile: id => this.reconcile(id), socialCycle: () => this.social.cycle(), growthCycle: () => this.growth.cycle(), supported: (provider, operation) => this.connectors.some(c => c.capability.provider === provider && c.capability.operations.includes(operation)) });
   }
   async start(): Promise<void> {
     this.agent.recover();
@@ -134,7 +145,7 @@ export class AppService {
     this.pipelines.stop();
     // 각 종료 함수가 먼저 타이머/프로세스를 중지한다. AI 종료를 기다리는 동안
     // 큐나 스케줄러가 다음 작업을 시작하지 않도록 모두 함께 중지한다.
-    const results = await Promise.allSettled([this.development.close(), this.agent.close(), this.backups.close(), this.preparation.close(), this.operations.stop(), this.scheduler.stop(), this.queue.stop()]);
+    const results = await Promise.allSettled([this.development.close(), this.agent.close(), this.growth.stop(), this.backups.close(), this.preparation.close(), this.operations.stop(), this.scheduler.stop(), this.queue.stop()]);
     const failure = results.find(result => result.status === 'rejected');
     if (failure?.status === 'rejected') throw failure.reason;
   }
@@ -149,7 +160,7 @@ export class AppService {
     const storeProvider = provider as 'google-play'|'app-store'|'steam';
     const connection = this.connection(text(data.connectionId,'스토어 계정',100));
     if (connection.provider !== provider) throw new AppError('CONNECTION_MISMATCH','스토어와 계정 종류가 다릅니다.');
-    if (this.store.runs(100_000).some(r=>r.projectId===id&&!['succeeded','failed','cancelled'].includes(r.status))) throw new AppError('PROJECT_BUSY','진행 중인 프로젝트 작업을 완료하거나 취소한 뒤 앱 연결을 바꿔 주세요.',409);
+    if (this.store.hasRuns({ projectId: id, statuses: ['queued','running','retry_wait','waiting_external','action_required'] })) throw new AppError('PROJECT_BUSY','진행 중인 프로젝트 작업을 완료하거나 취소한 뒤 앱 연결을 바꿔 주세요.',409);
     const appId = text(data.appId,'스토어 앱 ID',200);
     if (provider === 'google-play' ? !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(appId) : !/^\d{1,20}$/.test(appId)) throw new AppError('INVALID_APP_ID','스토어 앱 ID 형식을 확인해 주세요.');
     if (provider === 'google-play' && project.appIdentifier && project.appIdentifier !== appId) throw new AppError('APP_MISMATCH','프로젝트 패키지 이름과 같은 Google Play 앱을 연결해 주세요.');
@@ -207,6 +218,7 @@ export class AppService {
   }
   async state(): Promise<AppState> {
     await this.recoverConnectionCommits();
+    const metrics = this.store.list<MetricFact>('metric');
     return {
       projects: this.store.list<Project>('project'), connections: this.store.list<Connection>('connection'),
       runs: this.store.runs(), events: this.store.events(), capabilities: this.connectors.map(c => c.capability),
@@ -216,8 +228,8 @@ export class AppService {
       pipelines: this.pipelines.list(),
       mediaAssets: this.store.list('media'),
       importedArtifacts: this.store.list('imported-artifact'),
-      metrics: summarizeMetrics(this.store.list<MetricFact>('metric')), metricFacts: this.store.list<MetricFact>('metric'), vault: await this.vault.status(),
-      runtime: { version: '0.1.0', platform: process.platform, dataDirectory: this.store.directory, startedAt: this.startedAt, mode: this.options.mode ?? 'live', notificationsEnabled: this.operations.settings().notifications },
+      metrics: summarizeMetrics(metrics), metricFacts: metrics, vault: await this.vault.status(),
+      runtime: { version: '0.1.0', platform: process.platform, dataDirectory: this.store.directory, startedAt: this.startedAt, mode: this.options.mode ?? 'live', notificationsEnabled: this.operations.settings().notifications, ...(this.store.get<{ at: string }>('settings', 'device-transferred') ? { deviceTransferredAt: this.store.get<{ at: string }>('settings', 'device-transferred')!.at } : {}) },
     };
   }
   async importArtifact(projectId:string,input:unknown):Promise<ImportedArtifact> {
@@ -273,9 +285,12 @@ export class AppService {
     if (this.development.tasks.list().some(task => task.projectId === id)) throw new AppError('DEVELOPMENT_TASKS_EXIST', '개발 작업과 worktree가 연결되어 있습니다. 작업 자료를 정리한 뒤 프로젝트를 제거하세요.');
     if (!this.project(id).relinkRequired) this.integrations.assertAvailable(id);
     this.project(id);
-    this.requireResolvedEffects(run => run.projectId === id);
+    this.requireResolvedEffects({ projectId: id });
+    if (this.development.deployments.activeForProject(id) || this.store.hasUnresolvedDeployment(id)) throw new AppError('DEPLOY_UNRESOLVED', '웹 배포 결과를 확인한 뒤 프로젝트를 제거하세요.', 409);
     await this.agent.remove(id);
-    for (const run of this.store.runs(10_000).filter(r => r.projectId === id && activeStatuses.has(r.status))) this.queue.cancel(run.id);
+    this.requireResolvedEffects({ projectId: id });
+    if (this.development.deployments.activeForProject(id) || this.store.hasUnresolvedDeployment(id)) throw new AppError('DEPLOY_UNRESOLVED', '웹 배포 결과를 확인한 뒤 프로젝트를 제거하세요.', 409);
+    for (const run of this.store.findRuns({ projectId: id, statuses: [...activeStatuses] })) this.queue.cancel(run.id);
     for (const schedule of this.social.listSchedules().filter(schedule => schedule.projectId === id && schedule.status === 'scheduled')) {
       this.store.put('social-schedule', schedule.id, { ...schedule, status: 'cancelled', updatedAt: now() });
     }
@@ -304,9 +319,16 @@ export class AppService {
     if (options.runnerId && !this.store.get<RunnerRegistration>('runner', String(options.runnerId))) throw new AppError('RUNNER_REQUIRED', '등록한 원격 러너를 선택해 주세요.');
     this.store.put('settings', profileKey, options);
     const run = this.store.createRun({ projectId: id, kind: 'build', label: `${project.name} · ${target} 빌드`, input: { ...options, toolPaths: this.preparation.toolPaths(), ...(pipeline ? { pipelineId: pipeline.id } : {}), buildSecurity: this.buildKeys.capture(project) }, pipeline });
-    this.queue.tick(); return run;
+    this.store.afterCommit(() => this.queue.tick()); return run;
   }
-  async addMedia(input: unknown) { return addMedia(this.store, input); }
+  async addMedia(input: unknown) { return addMedia(this.store, input, await Promise.all(this.protectedProjectRoots().concat(this.vault.directory).map(root => realpath(root).catch(() => root)))); }
+  /** 이전한 장비를 계속 쓰기로 한 경우에만 호출한다. 새 장비의 자동화와 겹치지 않는지는 사용자가 확인한다. */
+  reclaimDevice(input: unknown): { reclaimed: true } {
+    if (object(input).confirmed !== true) throw new AppError('CONFIRMATION_REQUIRED', '새 장비의 자동화를 중지했는지 확인한 뒤 다시 활성화해 주세요.');
+    if (!this.store.get('settings', 'device-transferred')) return { reclaimed: true };
+    this.store.writeBatch([], [{ kind: 'settings', id: 'device-transferred' }], [{ kind: 'device.reclaimed', level: 'warning', message: '이 장비의 자동화를 다시 활성화했습니다. 다른 장비의 같은 계정 자동화는 꺼 두어야 합니다.' }]);
+    return { reclaimed: true };
+  }
   async publish(id: string, input: unknown) { return this.lock('publish:' + id, () => this.pipelines.publish(id, input)); }
   saveBuildSecurity(id: string, input: unknown): Project {
     const project = this.project(id); const buildSecurity = this.buildKeys.policy(input);
@@ -388,12 +410,13 @@ export class AppService {
         // Repair legacy names accepted as Ads customer IDs, without allowing a
         // working connection (and its queued writes) to be retargeted.
         if (connection.provider !== 'google-ads' || /^\d+$/.test(connection.accountId.replace(/-/g, ''))) throw new AppError('ACCOUNT_MISMATCH', '다른 계정은 새 연결로 등록해 주세요.', 409);
-        if (this.store.runs(100_000).some(r => r.connectionId === id && !['succeeded', 'failed', 'cancelled'].includes(r.status)) || [...this.oauth.values()].some(p => p.connection.id === id && p.expiresAt > Date.now())) throw new AppError('CONNECTION_BUSY', '진행 중인 연결 작업을 완료하거나 취소한 뒤 고객 ID를 수정해 주세요.', 409);
+        if (this.store.hasRuns({ connectionId: id, statuses: ['queued','running','retry_wait','waiting_external','action_required'] }) || this.store.unresolvedEffects({ connectionId: id }).length || [...this.oauth.values()].some(p => p.connection.id === id && p.expiresAt > Date.now())) throw new AppError('CONNECTION_BUSY', '진행 중인 연결 작업을 완료하거나 취소한 뒤 고객 ID를 수정해 주세요.', 409);
         const validated = this.newConnection({ provider: connection.provider, label: connection.label, accountId: data.accountId }, id);
         connection = { ...connection, accountId: validated.accountId.replace(/-/g, '') };
       }
       let previous: Record<string, string> = {};
       try { previous = await this.vault.get(id); } catch (error) { if ((error as { code?: string }).code !== 'credential_not_found') throw error; }
+      if (connection.accountId !== this.connection(id).accountId && (this.store.hasRuns({ connectionId: id, statuses: ['queued','running','retry_wait','waiting_external','action_required'] }) || this.store.unresolvedEffects({ connectionId: id }).length)) throw new AppError('CONNECTION_BUSY', '계정 변경 준비 중 작업이 예약되었습니다. 완료하거나 취소한 뒤 다시 시도해 주세요.', 409);
       const credentials = { ...previous, ...next }; this.validateCredentialFields(connection, credentials);
       const updated: Connection = { ...connection, credentialFields: publicCredentialFields(credentials), status: 'unverified', lastError: null, updatedAt: now() };
       await this.commitConnection(updated, credentials, { kind: 'connection.repaired', message: connection.label + ' 연결 정보를 갱신했습니다.' });
@@ -404,11 +427,14 @@ export class AppService {
     // A failed vault cleanup leaves this explicit tombstone so DELETE can resume.
     const connection = this.store.get<Connection>('connection', id);
     if (!connection) throw new AppError('NOT_FOUND', '연결된 계정을 찾을 수 없습니다.', 404);
-    this.requireResolvedEffects(run => run.connectionId === id);
+    this.requireResolvedEffects({ connectionId: id });
     this.store.put('connection', id, { ...connection, status: 'disconnected', updatedAt: now() });
-    for (const run of this.store.runs(10_000).filter(r => r.connectionId === id && activeStatuses.has(r.status))) this.queue.cancel(run.id);
+    for (const run of this.store.findRuns({ connectionId: id, statuses: [...activeStatuses] })) this.queue.cancel(run.id);
     await this.lock(id, async () => {
-      await this.vault.remove(id); this.tokens.invalidate(id); this.socialTokens.reset(id);
+      this.requireResolvedEffects({ connectionId: id });
+      await this.vault.remove(id);
+      this.requireResolvedEffects({ connectionId: id });
+      this.tokens.invalidate(id); this.socialTokens.reset(id);
       this.store.writeBatch([], [{ kind: 'connection', id }, { kind: 'connection-commit', id }]);
       for (const project of this.store.list<Project>('project')) {
         if (project.policy.allowedConnectionIds.includes(id) || project.socialPolicy?.connectionIds.includes(id)) this.store.put('project', project.id, {
@@ -423,10 +449,8 @@ export class AppService {
     });
     return { deleted: true };
   }
-  private requireResolvedEffects(matches: (run: Run) => boolean): void {
-    const unresolved = this.store.runs(100_000).filter(run => matches(run) &&
-      ['running', 'waiting_external', 'action_required'].includes(run.status) &&
-      ['dispatched', 'action_required'].includes(this.store.effectState(run.id) ?? ''));
+  private requireResolvedEffects(scope: { projectId?: string; connectionId?: string }): void {
+    const unresolved = this.store.unresolvedEffects(scope);
     if (unresolved.length) throw new AppError('UNRESOLVED_EXTERNAL_EFFECT',
       '외부 반영을 확인 중인 작업이 있어 아직 삭제할 수 없습니다. 이력에서 상태 확인을 완료해 주세요.', 409,
       { runIds: unresolved.map(run => run.id) });
@@ -460,8 +484,10 @@ export class AppService {
     const status = ['TEMPORARY', 'VAULT_LOCKED', 'VAULT_UNAVAILABLE'].includes(normalized.code) ? 'recovering' : normalized.code === 'PERMISSION_REQUIRED' ? 'permission_required' : 'action_required';
     try { this.saveConnectionStatus(id, status, normalized.message); } catch {}
   }
-  action(id: string, input: unknown, pipeline?: ReleasePipeline): Run {
+  action(id: string, input: unknown, pipeline?: ReleasePipeline, mutate?: import('../../packages/storage/index.js').RunMutation): Run {
     const connection = this.connection(id); const data = object(input); const operation = text(data.operation, '작업', 80);
+    const pendingConnection = this.store.get<ConnectionCommit>('connection-commit', id)?.connection;
+    if (pendingConnection && pendingConnection.accountId !== connection.accountId) throw new AppError('CONNECTION_BUSY', '계정 ID를 변경 중입니다. 연결 갱신이 끝난 뒤 작업을 예약해 주세요.', 409);
     if (!this.connector(connection.provider).capability.operations.includes(operation)) throw new AppError('UNSUPPORTED_OPERATION', '이 연결에서 지원하지 않는 작업입니다.');
     const project = data.projectId ? this.project(text(data.projectId, '프로젝트 ID')) : undefined;
     if (operation === 'sync-app' && !project) throw new AppError('PROJECT_REQUIRED', '동기화할 프로젝트를 선택해 주세요.');
@@ -471,6 +497,7 @@ export class AppService {
     this.social.enforceWrite(project, connection, operation, actionInput);
     this.requireResourceScope(project, connection, operation, actionInput);
     enforceCampaignBudget(project, connection, operation, actionInput, this.store.list<ExternalResource>('resource'), project ? this.store.pendingCampaigns(project.id) : []);
+    enforceReleasedForAds(project, connection, operation, actionInput, this.store.list('release-observation'));
     if (operation === 'upload-build') {
       if(actionInput.importedArtifactId){
         if(actionInput.buildRunId)throw new AppError('INVALID_INPUT','가져온 결과물과 내부 빌드 중 하나만 선택해 주세요.');
@@ -485,8 +512,8 @@ export class AppService {
     }
     const run = this.store.createRun({ connectionId: id, projectId: project?.id, kind: operation,
       label: `${connection.label} · ${operation}`, input: actionInput, writeEffect: isWriteOperation(operation, connection.provider),
-      idempotencyKey: data.idempotencyKey === undefined ? undefined : text(data.idempotencyKey, '요청 키', 128), pipeline });
-    this.queue.tick(); return run;
+      idempotencyKey: data.idempotencyKey === undefined ? undefined : text(data.idempotencyKey, '요청 키', 128), pipeline }, mutate);
+    this.store.afterCommit(() => this.queue.tick()); return run;
   }
   private requireResourceScope(project: Project | undefined, connection: Connection, operation: string, input: Record<string, unknown>): void {
     if (project && ['create-campaign','create-ad-unit'].includes(operation) && ['google-ads','applovin-ads','applovin-max'].includes(connection.provider)) {
@@ -546,11 +573,11 @@ export class AppService {
     if (!original?.connectionId || !isWriteOperation(original.kind, this.connection(original.connectionId).provider) || !['waiting_external', 'action_required'].includes(original.status)) {
       throw new AppError('RECONCILIATION_UNAVAILABLE', '외부 반영을 기다리는 작업만 상태를 다시 확인할 수 있습니다.', 409);
     }
-    const pending = this.store.runs(10_000).find(run => run.kind === 'reconcile' && run.input.targetRunId === id && activeStatuses.has(run.status));
+    const pending = this.store.findRuns({ kinds: ['reconcile'], targetRunId: id, statuses: [...activeStatuses] })[0];
     if (pending) return pending;
     const run = this.store.createRun({ connectionId: original.connectionId, projectId: original.projectId,
       kind: 'reconcile', label: original.label + ' 상태 확인', input: { targetRunId: id } });
-    this.queue.tick(); return run;
+    this.store.afterCommit(() => this.queue.tick()); return run;
   }
   resolveRun(id: string, input: unknown): Run {
     const data = object(input); prohibitSecrets(data);
@@ -560,7 +587,7 @@ export class AppService {
     const note = text(data.note, '서비스에서 확인한 내용', 1000);
     if (note.length < 5) throw new AppError('INVALID_INPUT', '확인한 내용과 근거를 구체적으로 입력해 주세요.');
     const expected = text(data.expectedUpdatedAt, '확인한 작업 시각', 100);
-    if (this.store.runs(100_000).some(run => run.kind === 'reconcile' && run.input.targetRunId === id && activeStatuses.has(run.status))) throw new AppError('RECONCILIATION_BUSY', '진행 중인 상태 확인이 끝난 뒤 기록해 주세요.', 409);
+    if (this.store.hasRuns({ kinds: ['reconcile'], targetRunId: id, statuses: [...activeStatuses] })) throw new AppError('RECONCILIATION_BUSY', '진행 중인 상태 확인이 끝난 뒤 기록해 주세요.', 409);
     return this.store.reconcile(id, expected, data.outcome as 'succeeded'|'failed', {
       method:'operator-confirmed', note, checkedAt:now(),
       ...(data.externalId ? {externalId:text(data.externalId,'서비스의 리소스 ID',200)} : {}),
@@ -690,6 +717,8 @@ export class AppService {
       this.requireResourceScope(project ? this.project(project.id) : undefined, this.connection(connection.id), run.kind, run.input);
       enforceCampaignBudget(project ? this.project(project.id) : undefined, this.connection(connection.id), run.kind, run.input,
         this.store.list<ExternalResource>('resource'), project ? this.store.pendingCampaigns(project.id) : [], run.id);
+      enforceReleasedForAds(project ? this.project(project.id) : undefined, this.connection(connection.id), run.kind, run.input, this.store.list('release-observation'));
+      this.growth.assertDispatch(run);
       if (!dispatched) { execution.markDispatched(); dispatched = true; }
     };
     const workDirectory = join(this.store.directory, 'operations', run?.id ?? randomUUID());
@@ -704,7 +733,7 @@ export class AppService {
       request, progress: message => execution?.progress(redact(message, Object.values(credentials))),
     };
   }
-  private async execute(run: Run, execution: ExecutionContext): Promise<{ result: Record<string, unknown>; status?: Run['status']; effectResolved?: boolean }> {
+  private async execute(run: Run, execution: ExecutionContext): Promise<{ result: Record<string, unknown>; status?: Run['status']; effectResolved?: boolean; commit?: () => void }> {
     try {
       if (run.kind === 'build') return await this.executeBuild(run, execution);
       if (!run.connectionId) throw new AppError('CONNECTION_REQUIRED', '작업에 연결된 계정이 없습니다.');
@@ -717,7 +746,8 @@ export class AppService {
         await this.verifyMarketingIdentity(run, connection, project, context);
         if (run.kind === 'reconcile') return this.executeReconciliation(run, connection, context);
         if (run.kind === 'upload-build') context.artifact = await this.verifiedArtifact(run, connection.provider);
-        if (run.kind === 'upload-listing-image') context.artifact = await mediaArtifact(this.store, run.projectId, run.input.mediaAssetId);
+        // 등록 미디어를 쓰는 작업은 업로드 직전에 해시를 다시 검증한 파일만 커넥터에 넘긴다.
+        if (run.kind === 'upload-listing-image' || (run.input.mediaAssetId !== undefined && ['create-post', 'reply', 'create-creative', 'update-creative', 'upload-app-preview'].includes(run.kind))) context.artifact = await mediaArtifact(this.store, run.projectId, run.input.mediaAssetId);
         let result: ConnectorResult;
         try {
           result = await this.connector(connection.provider).execute(run.kind, run.input, context);
@@ -730,71 +760,14 @@ export class AppService {
         }
         execution.signal.throwIfAborted();
         this.connection(connection.id);
-        this.persistResult(run, connection, result);
-        this.saveConnectionStatus(connection.id, 'connected', null);
-        return { result: result.summary, status: result.unresolved ? 'action_required' : result.failed ? 'failed' : result.waitingExternal ? 'waiting_external' : 'succeeded', effectResolved: result.failed === true && !result.unresolved };
+        return { commit: () => { persistResult(this.store, run, connection, result); this.saveConnectionStatus(connection.id, 'connected', null); }, result: result.summary, status: result.unresolved ? 'action_required' : result.failed ? 'failed' : result.waitingExternal ? 'waiting_external' : 'succeeded', effectResolved: result.failed === true && !result.unresolved };
       });
     } catch (error) {
       if (run.connectionId) this.recordConnectionError(run.connectionId, error);
       throw normalizeError(error);
     }
   }
-  private matchesProjectIdentifier(project: Project, identifier: unknown, provider: Provider): boolean {
-    if (project.appIdentifier === identifier) return true;
-    if (project.storeApps?.[provider as 'google-play'|'app-store'|'steam']?.appId === identifier) return true;
-    if (provider !== 'google-ads') return false;
-    const apple = this.store.get<{bundleId:string;appleAppId:string}>('settings', 'apple-identity:' + project.id);
-    return !!apple && apple.bundleId === project.appIdentifier && apple.appleAppId === identifier;
-  }
-  private persistResult(run: Run, connection: Connection, result: ConnectorResult): void {
-    prohibitSecrets(result);
-    const projects = this.store.list<Project>('project');
-    const updates: { kind: 'resource' | 'metric'; id: string; value: ExternalResource | MetricFact }[] = [];
-    if (!result.unresolved && !result.failed && ['delete-post','hide-reply'].includes(run.kind)) {
-      const target = run.input.postId ?? run.input.replyId ?? run.input.externalId;
-      for (const resource of this.store.list<ExternalResource>('resource').filter(item => item.connectionId === connection.id && item.externalId === target && item.projectId === run.projectId)) {
-        const hidden = run.input.hide === true || run.input.hide === 'true';
-        updates.push({ kind: 'resource', id: resource.id, value: { ...resource, status: run.kind === 'delete-post' ? 'deleted' : hidden ? 'hidden' : 'published', data: { ...resource.data, ...(run.kind === 'hide-reply' ? { hidden } : {}) }, updatedAt: now() } });
-      }
-    }
-    for (const resource of result.resources ?? []) {
-      const identity = resource.kind === 'news' ? `${connection.id}:news:${resource.data.appId ?? 'unassigned'}:${resource.externalId}` : connection.id + ':' + resource.kind + ':' + resource.externalId;
-      const id = createHash('sha256').update(identity).digest('hex');
-      const previous = this.store.get<ExternalResource>('resource', id);
-      const identifier = resource.data.packageName ?? resource.data.bundleId ?? resource.data.appIdentifier ?? resource.data.appId;
-      const matching = identifier ? projects.filter(project => this.matchesProjectIdentifier(project, identifier, connection.provider)) : [];
-      let projectId = matching.length === 1 ? matching[0].id : identifier ? null : previous?.projectId ?? (isWriteOperation(run.kind, connection.provider) ? run.projectId : null);
-      let resourceData = matching.length === 1 && resource.kind === 'campaign' ? {...resource.data, appIdentifier: matching[0]!.appIdentifier} : resource.data;
-      if (['post', 'reply', 'mention', 'news'].includes(resource.kind)) {
-        const channelProjects = projects.filter(project => project.socialPolicy?.connectionIds.includes(connection.id));
-        const parentId = resource.data.conversationId ?? resource.data.replyToId;
-        const parent = parentId ? this.store.list<ExternalResource>('resource').find(item => item.connectionId === connection.id && item.externalId === parentId && item.projectId) : undefined;
-        projectId = identifier ? (matching.length === 1 ? matching[0]!.id : null) : (isSocialWrite(run.kind) ? run.projectId : null) ?? previous?.projectId ?? parent?.projectId ?? (channelProjects.length === 1 ? channelProjects[0]!.id : null);
-        resourceData = { ...resource.data, owned: isSocialWrite(run.kind) || previous?.data.owned === true || resource.data.owned === true || resource.data.authorId === connection.accountId || resource.data.is_owned_by_me === true };
-      }
-      updates.push({ kind: 'resource', id, value: { ...resource, data: resourceData, id, provider: connection.provider,
-        connectionId: connection.id, projectId, updatedAt: now() } });
-    }
-    for (const metric of result.metrics ?? []) {
-      const id = createHash('sha256').update([connection.id, metric.kind, metric.sourceId, metric.date, metric.currency].join(':')).digest('hex');
-      const matching = metric.appIdentifier ? projects.filter(project => this.matchesProjectIdentifier(project, metric.appIdentifier, connection.provider)) : [];
-      updates.push({ kind: 'metric', id, value: { ...metric, id, provider: connection.provider, connectionId: connection.id,
-        projectId: matching.length === 1 ? matching[0].id : null, collectedAt: now() } });
-    }
-    const removals: Array<{kind: 'metric' | 'resource'; id: string}> = (result.metricSourcePrefixes?.length ? this.store.list<MetricFact>('metric') : [])
-      .filter(metric => metric.connectionId === connection.id && result.metricSourcePrefixes!.some(prefix => metric.sourceId.startsWith(prefix)))
-      .map(metric => ({ kind: 'metric' as const, id: metric.id }));
-    if (!result.failed && !result.unresolved && result.resourceSnapshots?.length) {
-      const kinds = new Set(result.resourceSnapshots.map(scope => scope.kind));
-      const present = new Set(updates.filter(item => item.kind === 'resource').map(item => item.id));
-      for (const resource of this.store.list<ExternalResource>('resource')) {
-        if (resource.connectionId === connection.id && kinds.has(resource.kind) && !present.has(resource.id)) removals.push({kind:'resource',id:resource.id});
-      }
-    }
-    const observations = !result.failed && !result.unresolved ? observeReleases(this.store,run,connection,updates.filter(item=>item.kind==='resource').map(item=>item.value as ExternalResource),result.summary,now()) : [];
-    this.store.writeBatch([...updates,...observations], removals);
-  }
-  private async executeReconciliation(run: Run, connection: Connection, context: ConnectorContext): Promise<{ result: Record<string, unknown> }> {
+  private async executeReconciliation(run: Run, connection: Connection, context: ConnectorContext): Promise<{ result: Record<string, unknown>; commit: () => void }> {
     const original = this.store.getRun(text(run.input.targetRunId, '원래 작업 ID'));
     if (!original || original.connectionId !== connection.id || !['waiting_external', 'action_required'].includes(original.status)) {
       throw new AppError('RECONCILIATION_UNAVAILABLE', '원래 작업이 이미 완료되었거나 이 계정의 작업이 아닙니다.');
@@ -815,6 +788,18 @@ export class AppService {
       const appScreenshotId = original.result?.appScreenshotId;
       if (!appScreenshotId) throw new AppError('RECONCILIATION_REQUIRED', '스크린샷 예약 응답을 받지 못했습니다. App Store Connect에서 반영 여부를 확인해 주세요.', 409);
       result = await this.connector(connection.provider).execute('reconcile', { appScreenshotId }, context);
+      if (result.summary.failed === true) status = 'failed';
+      else if (result.summary.confirmed === true) status = 'succeeded';
+      else if (result.waitingExternal) status = 'waiting_external';
+    } else if (connection.provider === 'applovin-ads' && ['create-creative', 'update-creative'].includes(original.kind) && original.result?.uploadId) {
+      // 업로드 처리만 확인한다. 소재 세트는 업로드 완료 뒤 같은 입력으로 다시 실행해야 만들어지므로 확정하지 않는다.
+      result = await this.connector(connection.provider).execute('reconcile', { uploadId: original.result.uploadId }, context);
+      if (result.summary.failed === true) status = 'failed';
+      else if (result.waitingExternal) status = 'waiting_external';
+    } else if (original.kind === 'upload-app-preview' && connection.provider === 'app-store') {
+      const appPreviewId = original.result?.appPreviewId ?? original.result?.appleAppPreviewId;
+      if (!appPreviewId) throw new AppError('RECONCILIATION_REQUIRED', '앱 프리뷰 예약 응답을 받지 못했습니다. App Store Connect에서 반영 여부를 확인해 주세요.', 409);
+      result = await this.connector(connection.provider).execute('reconcile', { appPreviewId }, context);
       if (result.summary.failed === true) status = 'failed';
       else if (result.summary.confirmed === true) status = 'succeeded';
       else if (result.waitingExternal) status = 'waiting_external';
@@ -845,6 +830,11 @@ export class AppService {
       result = await this.connector(connection.provider).execute('reconcile', { buildId, branch: original.result?.steamTrack ?? original.result?.branch ?? original.input.branch }, context);
       if (result.summary.confirmed === true) status = 'succeeded';
       else if (result.waitingExternal) status = 'waiting_external';
+    } else if (connection.provider === 'google-ads' && ['create-experiment', 'promote-experiment'].includes(original.kind) && original.result?.experimentId) {
+      result = await this.connector(connection.provider).execute('reconcile', { experimentId: original.result.experimentId, action: original.kind === 'create-experiment' ? 'schedule' : 'promote' }, context);
+      if (result.summary.failed === true) status = 'failed';
+      else if (result.summary.confirmed === true) status = 'succeeded';
+      else if (result.waitingExternal) status = 'waiting_external';
     } else if (isSocialWrite(original.kind) && connection.provider === 'threads' && original.result?.containerId) {
       result = await this.connector(connection.provider).execute('reconcile', { containerId: original.result.containerId }, context);
       if (result.summary.status === 'PUBLISHED') status = 'succeeded';
@@ -860,9 +850,10 @@ export class AppService {
       throw new AppError('RECONCILIATION_REQUIRED', '이 변경의 결과를 확정할 응답을 받지 못했습니다. 해당 서비스에서 반영 여부를 확인해 주세요. 중복 변경은 보내지 않습니다.', 409);
     }
     context.signal.throwIfAborted();
-    this.persistResult(run, connection, result);
-    this.store.reconcile(original.id, original.updatedAt, status, { ...result.summary, checkedAt: now() });
-    return { result: { targetRunId: original.id, status, ...result.summary } };
+    return { commit: () => {
+      persistResult(this.store, run, connection, result);
+      this.store.reconcile(original.id, original.updatedAt, status, { ...result.summary, checkedAt: now() });
+    }, result: { targetRunId: original.id, status, ...result.summary } };
   }
   protected async executeBuild(run: Run, execution: ExecutionContext): Promise<{ result: Record<string, unknown> }> {
     this.integrations.assertAvailable(run.projectId!);
@@ -913,6 +904,26 @@ export class AppService {
     }
     execution.checkpoint({ artifacts });
     return { result: { artifacts, signatures, snapshotHash, dependencies, target, startedAt: result.startedAt, finishedAt: result.finishedAt } };
+  }
+  private async classifyCommunity(prompt: string, signal: AbortSignal): Promise<string> {
+    const choice = agentChoice(this.agent.settings(), 'operations');
+    const runtime = (await discoverAgentRuntimes()).find(item => item.executable && (choice.provider === 'auto' || item.provider === choice.provider));
+    if (!runtime?.executable) throw new AppError('AGENT_UNAVAILABLE', '고객응대 초안에 사용할 Codex 또는 OpenCode CLI를 찾지 못했습니다. 초안 없이 분류만 기록합니다.');
+    return runStructuredCli({ provider: runtime.provider, executable: runtime.executable, model: choice.model, prompt, signal, denyRead: this.protectedProjectRoots().concat(this.vault.directory) });
+  }
+  /** 지식 후보는 프로젝트 최상위와 docs/의 공개 문서만 읽는다. 비밀 의심 파일은 project-files가 거절한다. */
+  private async knowledgeFiles(project: Project): Promise<Array<{ path: string; content: string }>> {
+    const files: Array<{ path: string; content: string }> = [];
+    const candidates = /^(?:readme|changelog|faq|support|known[_-]?issues|release[_-]?notes)[^/]*\.(?:md|txt)$/i;
+    for (const directory of ['', 'docs']) {
+      let listing;
+      try { listing = await listProjectFiles(project.rootPath, directory); } catch { continue; }
+      for (const entry of listing.files) {
+        if (entry.directory || !candidates.test(entry.path.split('/').at(-1) ?? '')) continue;
+        try { files.push(await readProjectFile(project.rootPath, entry.path)); } catch { /* 비밀·크기 제한 파일은 제외 */ }
+      }
+    }
+    return files;
   }
   private async verifiedArtifact(run: Run, provider: Provider): Promise<VerifiedArtifact> {
     if(run.input.importedArtifactId){

@@ -8,7 +8,7 @@ import { inspectProject } from '../../packages/inspection/index.js';
 import { packFiles, unpackFiles, MAX_BUNDLE_BYTES } from '../../packages/remote-runner/index.js';
 import { executeBuild } from './execute.js';
 import { probeIsolation, type IsolationOptions } from './sandbox.js';
-import { targetValue } from '../controller/validation.js';
+import { targetValue } from '../../packages/domain/validation.js';
 
 export interface RemoteRunnerOptions { directory:string;port?:number;host?:string;token?:string;isolation?:IsolationOptions;execute?:typeof executeBuild;engines?:Partial<Record<import('../../packages/domain/index.js').EngineKind,string>> }
 export async function startRemoteRunner(options:RemoteRunnerOptions) {

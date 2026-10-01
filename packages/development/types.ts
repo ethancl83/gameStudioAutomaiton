@@ -123,3 +123,50 @@ export interface DevelopmentState {
   connections: CliConnection[];
   deployments: WebDeployment[];
 }
+// GitHub 저장소 목록 응답(github.ts repositories()).
+export interface GithubRepository {
+  id: number;
+  full_name: string;
+  clone_url: string;
+  private: boolean;
+}
+// 이슈·PR 목록 한 페이지(github.ts listItems()).
+export interface GithubItemPage {
+  items: GithubItem[];
+  hasMore: boolean;
+  page: number;
+}
+// POST /development action별 응답(apps/controller/development.ts). 등록한 action은 renderer에서 응답 타입을 추론하고,
+// 등록하지 않은 action은 호출자가 타입을 지정한다. 서버가 허용하는 action 목록과는 무관하다.
+export interface DevelopmentResponses {
+  state: DevelopmentState;
+  repositories: GithubRepository[];
+  "git-state": GitState;
+  "git-init": GitState;
+  "git-remote": GitState;
+  "git-clone": { directory: string };
+  "git-diff": { diff: string };
+  "git-stage": GitState;
+  "git-unstage": GitState;
+  "git-fetch": GitState;
+  "git-pull": GitState;
+  "git-push": GitState;
+  "git-commit": GitState;
+  "git-branch": GitState;
+  items: GithubItemPage;
+  policy: DevelopmentPolicy;
+  "policy-save": DevelopmentPolicy;
+  import: DevelopmentTask;
+  analyze: DevelopmentTask;
+  implement: DevelopmentTask;
+  verify: DevelopmentTask;
+  commit: DevelopmentTask;
+  push: DevelopmentTask;
+  pr: DevelopmentTask;
+  cancel: DevelopmentTask;
+  "reconcile-push": DevelopmentTask;
+  "preview-check": { previews: NonNullable<DevelopmentTask["previews"]> };
+  cleanup: { cleaned: boolean; preserved?: boolean; branch?: string };
+  document: { text: string };
+}
+export type DevelopmentAction = keyof DevelopmentResponses;

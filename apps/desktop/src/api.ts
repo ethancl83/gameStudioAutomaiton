@@ -27,6 +27,7 @@ import type {
   Run,
   HistoryPage,
   SocialSchedule,
+  MediaAsset,
 } from '../../../packages/domain';
 // 준비(설치) 계약. 타입만 import하므로 Node 전용 구현은 번들에 포함되지 않는다.
 import type {
@@ -57,6 +58,13 @@ import type {
 
 export type { ApiResult };
 import type { AgentRequestContext, AgentSettings, AgentState, AgentTask } from '../../../packages/agent/types';
+// 성장 운영 공개 계약. 타입만 가져와 번들에 서버 구현이 들어가지 않는다.
+import type { GrowthDecisionCursor, GrowthDecisionPage, GrowthState } from '../../../packages/growth/types';
+export type { GrowthState };
+// 개발 스튜디오 계약. 타입만 가져와 번들에 서버 구현이 들어가지 않는다.
+// POST /development action별 응답 DTO는 서버와 같은 순수 타입 파일에서 가져온다.
+import type { DevelopmentAction, DevelopmentResponses } from '../../../packages/development/types';
+export type { DevelopmentAction, DevelopmentResponses, GithubRepository } from '../../../packages/development/types';
 export type StoreProvider = 'google-play' | 'app-store' | 'steam';
 // GET /projects/:id/integration 응답(루트 구현). previewId/applyId로 상관한다.
 export interface ProjectIntegrationState {
@@ -102,8 +110,15 @@ function readStoredMode(): RuntimeMode {
 // 전체 새로고침(location.reload)하여 새 인스턴스를 만드므로, 이전 모드의 stale promise가 새 트리로
 // 들어가거나 다른 모드에 쓰기를 보내는 일이 원천적으로 불가능하다.
 export class ApiClient {
-  studio<T = unknown>(action: string, input: Record<string, unknown> = {}) { return this.request<T>('POST', '/development', { ...input, action }); }
+  studio<A extends DevelopmentAction>(action: A, input?: Record<string, unknown>): Promise<ApiResult<DevelopmentResponses[A]>>;
+  studio<T = unknown>(action: string, input?: Record<string, unknown>): Promise<ApiResult<T>>;
+  studio(action: string, input: Record<string, unknown> = {}) { return this.request<unknown>('POST', '/development', { ...input, action }); }
   agentState() { return this.request<AgentState>('GET', '/agent'); }
+  reclaimDevice() { return this.request<{ reclaimed: true }>('POST', '/operations/reclaim-device', { confirmed: true }); }
+  // projectId가 있으면 그 프로젝트 범위만 조회한다(IPC 허용 목록이 query를 막으므로 경로 세그먼트로 전달).
+  growthState(projectId?: string) { return this.request<GrowthState>('GET', projectId ? `/growth/projects/${encodeURIComponent(projectId)}` : '/growth'); }
+  growthDecisions(input: { projectId: string; experimentId?: string; before?: GrowthDecisionCursor }) { return this.request<GrowthDecisionPage>('POST', '/growth/decisions/query', input); }
+  growth<T = unknown>(action: string, input: Record<string, unknown> = {}) { return this.request<T>('POST', '/growth', { ...input, action }); }
   saveAgentSettings(settings: AgentSettings) { return this.request<AgentSettings>('PUT', '/agent/settings', settings); }
   requestAgent(context: AgentRequestContext & { message: string }) { return this.request<AgentTask>('POST', '/agent/requests', context); }
   clearAgent(id: string) { return this.request<AgentTask>('POST', `/agent/${encodeURIComponent(id)}/clear`, {}); }
@@ -270,6 +285,7 @@ export class ApiClient {
     return this.request<Project>('POST', '/projects', { path });
   }
 
+  addMediaPath(input: {projectId: string; path: string}) { return this.request<MediaAsset>('POST', '/media', input); }
   addMedia(input: {projectId: string; name: string; base64: string}) {
     return this.request<import('../../../packages/domain').MediaAsset>('POST', '/media', input);
   }
@@ -611,8 +627,9 @@ export class ApiClient {
     return this.request<PortableBackupState>('GET', '/operations/portable-backups');
   }
   // 암호는 이 요청에만 쓰이고 저장·기록되지 않는다. 생성은 status:'creating'으로 시작하고 GET으로 폴링한다.
-  createPortableBackup(passphrase: string): Promise<ApiResult<PortableBackupRecord>> {
-    return this.request<PortableBackupRecord>('POST', '/operations/portable-backups', { passphrase });
+  // transfer=true: 장비 이전용. 백업이 성공하면 이 장비의 자동화를 중지한다(두 장비 동시 운영 방지).
+  createPortableBackup(passphrase: string, transfer = false): Promise<ApiResult<PortableBackupRecord>> {
+    return this.request<PortableBackupRecord>('POST', '/operations/portable-backups', { passphrase, ...(transfer ? { transfer: true } : {}) });
   }
   // 복원 준비: 암호로 아카이브를 열어 검증하고 요약(projectCount 등)을 만든다. status:'preparing' → 폴링.
   preparePortableRestore(backupId: string, passphrase: string): Promise<ApiResult<PortableRestoreRecord>> {

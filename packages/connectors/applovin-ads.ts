@@ -1,84 +1,17 @@
 import { AppError, text } from '../domain/errors.js';
-import type { Connector, ConnectorContext, ConnectorResult, ResourceInput } from './types.js';
-import { countryCode, currencyCode, daysAgo, headerAuth, isoDate, microsString, microsToDecimal, moneyToMicros, ymd } from './marketing-utils.js';
+import type { AttributionInput, Connector, ConnectorContext, ConnectorResult, ResourceInput } from './types.js';
+import { countryCode, currencyCode, daysAgo, isoDate, microsString, microsToDecimal, moneyToMicros, ymd } from './marketing-utils.js';
+import { accountId, auth, manageUrl, listCampaigns, readCampaign } from './applovin-ads-client.js';
+export { accountId, auth, manageUrl, readCampaign } from './applovin-ads-client.js';
+import { createCreative, listCreatives, reconcileUpload, updateCreative } from './applovin-ads-creatives.js';
+import { parseMicros } from '../metrics/index.js';
 
-const MANAGE = 'https://api.ads.axon.ai/manage/v1';
 const REPORT = 'https://r.applovin.com/report';
-
-function accountId(ctx: ConnectorContext): string {
-  const id = ctx.credentials.accountId || ctx.connection.accountId;
-  if (!id || !/^\d+$/.test(id)) throw new AppError('INVALID_INPUT', 'AppLovin Ads account_id 가 필요합니다.');
-  return id;
-}
-
-function campaignKey(ctx: ConnectorContext): string {
-  const key = ctx.credentials.campaignManagementKey || ctx.credentials.apiKey;
-  if (!key) throw new AppError('AUTH_REQUIRED', 'Campaign Management API 키를 연결하세요. MAX Management Key와 다릅니다.');
-  return key;
-}
 
 function reportKey(ctx: ConnectorContext): string {
   const key = ctx.credentials.reportKey;
   if (!key) throw new AppError('AUTH_REQUIRED', '광고 보고용 Report Key가 필요합니다. Campaign Management 키와 별개입니다.');
   return key;
-}
-
-function auth(ctx: ConnectorContext): Record<string, string> {
-  return headerAuth('raw', campaignKey(ctx));
-}
-
-function manageUrl(path: string, ctx: ConnectorContext, extra?: Record<string, string>): string {
-  const query = new URLSearchParams({ account_id: accountId(ctx), ...extra });
-  return `${MANAGE}${path}?${query}`;
-}
-
-function campaignResource(item: Record<string, unknown>): ResourceInput {
-  const budget = (item.budget ?? {}) as Record<string, unknown>;
-  const daily = budget.daily_budget_for_all_countries;
-  const dailyMicros = daily != null ? moneyToMicros(String(daily), '일일 예산') : undefined;
-  return {
-    kind: 'campaign',
-    externalId: String(item.id ?? ''),
-    name: String(item.name ?? item.id ?? ''),
-    status: String(item.status ?? 'UNKNOWN'),
-    data: {
-      hashedId: item.hashed_id,
-      platform: item.platform,
-      packageName: item.package_name,
-      itunesId: item.itunes_id,
-      type: item.type,
-      biddingStrategy: item.bidding_strategy,
-      dailyBudget: daily,
-      dailyBudgetMicros: dailyMicros ?? '0',
-      currency: 'USD',
-      targeting: item.targeting,
-      startDate: item.start_date,
-      appIdentifier: typeof item.package_name === 'string' ? item.package_name : (item.itunes_id != null ? String(item.itunes_id) : undefined),
-    },
-  };
-}
-
-async function listCampaigns(ctx: ConnectorContext, ids?: string): Promise<ConnectorResult> {
-  const resources: ResourceInput[] = [];
-  for (let page = 1; page <= 50; page++) {
-    const extra: Record<string, string> = { page: String(page), size: '100' };
-    if (ids) extra.ids = ids;
-    const rows = await ctx.request<unknown>(manageUrl('/campaign/list', ctx, extra), { headers: auth(ctx) });
-    if (!Array.isArray(rows)) throw new AppError('INVALID_PROVIDER_RESPONSE', '캠페인 목록 응답이 배열이 아닙니다.');
-    for (const row of rows) {
-      if (row && typeof row === 'object') resources.push(campaignResource(row as Record<string, unknown>));
-    }
-    if (ids || rows.length < 100) break;
-    if (page === 50) throw new AppError('PAGINATION_LIMIT', '캠페인 전체 목록을 가져오지 못했습니다. 이전 목록을 보존합니다.');
-  }
-  return { resources, ...(!ids ? { resourceSnapshots: [{ kind: 'campaign' as const }] } : {}), summary: { accountId: accountId(ctx), campaignCount: resources.length } };
-}
-
-async function readCampaign(ctx: ConnectorContext, id: string): Promise<ResourceInput> {
-  const listed = await listCampaigns(ctx, id);
-  const resource = listed.resources?.find(item => item.externalId === id);
-  if (!resource) throw new AppError('RESOURCE_NOT_FOUND', '캠페인을 다시 조회할 수 없습니다.');
-  return resource;
 }
 
 const TRACKING_METHODS = ['ADJUST', 'APPSFLYER', 'APSALAR', 'BRANCH', 'KOCHAVA', 'TENJIN'] as const;
@@ -200,17 +133,20 @@ async function updateCampaign(input: Record<string, unknown>, ctx: ConnectorCont
   };
 }
 
-async function spendMetrics(ctx: ConnectorContext): Promise<ConnectorResult> {
-  const key = reportKey(ctx);
-  const start = daysAgo(6);
-  const end = ymd();
-  const url = `${REPORT}?${new URLSearchParams({
-    api_key: key, start, end, format: 'json', report_type: 'advertiser',
-    columns: 'day,cost,campaign_id_external,campaign_package_name',
-  })}`;
+type Row = Record<string, unknown>;
+
+async function report(ctx: ConnectorContext, columns: string, start: string, end: string, extra: Record<string, string> = {}): Promise<unknown[]> {
+  const url = `${REPORT}?${new URLSearchParams({ api_key: reportKey(ctx), start, end, format: 'json', report_type: 'advertiser', columns, ...extra })}`;
   const data = await ctx.request<unknown>(url, { headers: {}, write: false });
   const rows = Array.isArray(data) ? data : (data && typeof data === 'object' && Array.isArray((data as { results?: unknown }).results) ? (data as { results: unknown[] }).results : null);
   if (!rows) throw new AppError('INVALID_PROVIDER_RESPONSE', 'AppLovin 광고 보고 응답 형식을 확인할 수 없습니다.');
+  return rows;
+}
+
+async function spendMetrics(ctx: ConnectorContext): Promise<ConnectorResult> {
+  const start = daysAgo(6);
+  const end = ymd();
+  const rows = await report(ctx, 'day,cost,campaign_id_external,campaign_package_name', start, end);
   const metrics = [];
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
@@ -228,10 +164,118 @@ async function spendMetrics(ctx: ConnectorContext): Promise<ConnectorResult> {
   return { metrics, summary: { from: start, to: end, timeZone: 'UTC', currency: 'USD', rowCount: metrics.length } };
 }
 
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** Reporting API `total_rev_«x»` 중 획득 cohort 귀속 창으로 쓰는 값. 30d·90d·1y는 45일 조회 창에서 완료 cohort가 거의 없어 제외한다. */
+const COHORT_DAYS = [0, 1, 3, 7, 14, 28] as const;
+const REPORT_WINDOW_DAYS = 45;
+
+function reportDate(value: unknown, label: string, fallback: string): string {
+  if (value === undefined || value === null || value === '') return fallback;
+  const raw = text(value, label, 10);
+  if (!DAY.test(raw) || new Date(`${raw}T00:00:00Z`).toISOString().slice(0, 10) !== raw) throw new AppError('INVALID_INPUT', `${label}는 YYYY-MM-DD 형식이어야 합니다.`);
+  return raw;
+}
+
+function reportCount(value: unknown, label: string): number {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : 0;
+  if (!Number.isFinite(parsed) || parsed < 0) throw new AppError('INVALID_PROVIDER_RESPONSE', `AppLovin ${label} 값 형식을 확인할 수 없습니다.`);
+  return parsed;
+}
+
+/** 캠페인·일자별 행을 합친다. 금액은 마이크로 BigInt, 횟수는 숫자로 더한다. */
+function groupRows(rows: unknown[], money: string[], counts: string[]): Map<string, { campaignId: string; day: string; appIdentifier?: string; money: Map<string, bigint>; counts: Map<string, number> }> {
+  const grouped = new Map<string, { campaignId: string; day: string; appIdentifier?: string; money: Map<string, bigint>; counts: Map<string, number> }>();
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const item = row as Row;
+    const day = String(item.day ?? '');
+    const campaignId = item.campaign_id_external == null ? '' : String(item.campaign_id_external);
+    // 캠페인 귀속이 없는 행은 ROAS·cohort 계산에 쓸 수 없어 귀속 fact로 남기지 않는다.
+    if (!DAY.test(day) || !campaignId) continue;
+    const key = `${campaignId}:${day}`;
+    const entry = grouped.get(key) ?? { campaignId, day, appIdentifier: item.campaign_package_name != null && item.campaign_package_name !== '' ? String(item.campaign_package_name) : undefined, money: new Map(), counts: new Map() };
+    for (const column of money) {
+      if (item[column] == null || item[column] === '') continue;
+      entry.money.set(column, (entry.money.get(column) ?? 0n) + parseMicros(moneyToMicros(item[column], column)));
+    }
+    for (const column of counts) entry.counts.set(column, (entry.counts.get(column) ?? 0) + reportCount(item[column], column));
+    grouped.set(key, entry);
+  }
+  return grouped;
+}
+
+/**
+ * 캠페인·일자별 귀속 fact.
+ * - 실시간 보고(day_column 없음): cost→spend(USD), conversions→installs("Number of conversions (installs)"), clicks, impressions. 귀속 창 0 = 공급자 기본.
+ * - cohort 보고(day_column=day, day=설치일): total_rev_{0,1,3,7,14,28}d → revenue, basis gross_conversion_value, 귀속 창 = cohort 일수.
+ *   아직 끝나지 않은 cohort 창(설치일 + 창 + 1일 > 지금)은 값이 계속 바뀌므로 남기지 않는다.
+ * 기존 spend MetricFact는 바꾸지 않는다.
+ */
+async function campaignAttribution(input: Record<string, unknown>, ctx: ConnectorContext, options: { cohortStart?: string; tolerateCohortRejection?: boolean } = {}): Promise<ConnectorResult> {
+  const earliest = daysAgo(REPORT_WINDOW_DAYS - 1);
+  const end = reportDate(input.endDate, '종료일', ymd());
+  const start = reportDate(input.startDate, '시작일', daysAgo(6));
+  if (start > end) throw new AppError('INVALID_INPUT', '시작일은 종료일보다 늦을 수 없습니다.');
+  if (start < earliest) throw new AppError('INVALID_INPUT', `AppLovin 보고는 최근 ${REPORT_WINDOW_DAYS}일 창만 조회합니다. 시작일은 ${earliest} 이후여야 합니다.`);
+  const cohortStart = options.cohortStart && options.cohortStart < start ? options.cohortStart : start;
+  const observedAt = new Date().toISOString();
+  const now = Date.now();
+  const accountKey = accountId(ctx);
+  const attribution: AttributionInput[] = [];
+  const common = (campaignId: string, day: string, appIdentifier: string | undefined, watermark: string) => ({
+    campaignId, acquisitionDate: day, eventDate: day, cohortKey: `applovin:${campaignId}:${day}`, observedAt, sourceWatermark: watermark,
+    revision: 1, finality: 'estimated' as const, ...(appIdentifier ? { appIdentifier } : {}),
+  });
+  const sourceId = (campaignId: string, day: string, kind: string) => `applovin-ads:campaign:${accountKey}:${campaignId}:${day}:${kind}`;
+
+  const realtime = groupRows(await report(ctx, 'day,campaign_id_external,campaign_package_name,cost,conversions,impressions,clicks', start, end), ['cost'], ['conversions', 'impressions', 'clicks']);
+  const realtimeWatermark = [...realtime.values()].map(item => item.day).sort().at(-1) ?? end;
+  for (const item of realtime.values()) {
+    const base = { ...common(item.campaignId, item.day, item.appIdentifier, realtimeWatermark), attributionWindowDays: 0 };
+    attribution.push(
+      { ...base, kind: 'spend', currency: 'USD', amountMicros: (item.money.get('cost') ?? 0n).toString(), sourceId: sourceId(item.campaignId, item.day, 'spend') },
+      { ...base, kind: 'installs', count: item.counts.get('conversions') ?? 0, sourceId: sourceId(item.campaignId, item.day, 'installs') },
+      { ...base, kind: 'clicks', count: item.counts.get('clicks') ?? 0, sourceId: sourceId(item.campaignId, item.day, 'clicks') },
+      { ...base, kind: 'impressions', count: item.counts.get('impressions') ?? 0, sourceId: sourceId(item.campaignId, item.day, 'impressions') },
+    );
+  }
+
+  const revenueColumns = COHORT_DAYS.map(days => `total_rev_${days}d`);
+  let cohortRejected: string | undefined;
+  let cohortRows: unknown[] = [];
+  try {
+    cohortRows = await report(ctx, `day,campaign_id_external,campaign_package_name,${revenueColumns.join(',')}`, cohortStart, end, { day_column: 'day' });
+  } catch (error) {
+    if (!options.tolerateCohortRejection || !(error instanceof AppError) || error.code !== 'PROVIDER_REJECTED') throw error;
+    cohortRejected = error.message;
+  }
+  const cohorts = groupRows(cohortRows, revenueColumns, []);
+  const cohortWatermark = [...cohorts.values()].map(item => item.day).sort().at(-1) ?? end;
+  for (const item of cohorts.values()) {
+    for (const days of COHORT_DAYS) {
+      const amount = item.money.get(`total_rev_${days}d`);
+      if (amount === undefined || Date.parse(`${item.day}T00:00:00Z`) + (days + 1) * 86_400_000 > now) continue;
+      attribution.push({
+        ...common(item.campaignId, item.day, item.appIdentifier, cohortWatermark), attributionWindowDays: days,
+        kind: 'revenue', currency: 'USD', amountMicros: amount.toString(), revenueBasis: 'gross_conversion_value', sourceId: sourceId(item.campaignId, item.day, `revenue:${days}d`),
+      });
+    }
+  }
+  return {
+    attribution,
+    summary: {
+      accountId: accountKey, timeZone: 'UTC', currency: 'USD', from: start, to: end, cohortFrom: cohortStart, factCount: attribution.length,
+      realtimeRows: realtime.size, cohortRows: cohorts.size, cohortWindows: [...COHORT_DAYS], revenueColumns, revenueBasis: 'gross_conversion_value',
+      installsColumn: 'conversions', attributionWindowNote: '광고비·설치 fact의 0은 공급자 기본 귀속입니다. 수익 fact의 창은 total_rev_«x»d의 cohort 일수입니다.',
+      ...(cohortRejected ? { cohortRevenue: 'unavailable', cohortRevenueReason: cohortRejected } : {}),
+    },
+  };
+}
+
 export const applovinAdsConnector: Connector = {
   capability: {
     provider: 'applovin-ads', name: 'AppLovin Ads', category: 'marketing',
-    description: 'Axon Campaign Management API로 기존 캠페인을 수정하고, 명시한 LIVE 생성·광고 지출 조회를 수행합니다.',
+    description: 'Axon Campaign Management API로 기존 캠페인을 수정하고, 명시한 LIVE 생성·소재 세트 관리·광고 지출과 캠페인 cohort 귀속 조회를 수행합니다.',
     authKind: 'Campaign Management API 키 + 별도 Report Key',
     fields: [
       { key: 'accountId', label: 'AppLovin account_id', required: true, placeholder: '숫자 계정 ID' },
@@ -245,8 +289,32 @@ export const applovinAdsConnector: Connector = {
       { key: 'impressionUrl', label: 'impression_url', secret: false },
       { key: 'clickUrl', label: 'click_url' },
     ],
-    operations: ['check', 'sync', 'list-campaigns', 'create-campaign', 'update-campaign', 'pause-campaign'],
+    operations: ['check', 'sync', 'list-campaigns', 'campaign-attribution', 'create-campaign', 'update-campaign', 'pause-campaign', 'list-creatives', 'create-creative', 'update-creative'],
     operationFields: {
+      'campaign-attribution': [
+        { key: 'startDate', type: 'date', required: false, label: '시작일', hint: '생략하면 6일 전. 최근 45일 안' },
+        { key: 'endDate', type: 'date', required: false, label: '종료일', hint: '생략하면 오늘' },
+      ],
+      'list-creatives': [
+        { key: 'externalId', type: 'text', required: false, label: '캠페인 ID', hint: '비우면 계정 전체 소재 세트' },
+      ],
+      'create-creative': [
+        { key: 'name', type: 'text', required: true, label: '소재 세트 이름', hint: '같은 캠페인에서 같은 이름이면 재실행으로 보고 기존 세트를 재사용합니다.' },
+        { key: 'assetIds', type: 'textarea', required: false, label: '기존 AppLovin asset ID JSON 배열', hint: 'HOSTED_HTML 또는 세로 전면 이미지(IMG_INTER_P)+동영상 구성이 필요합니다.', placeholder: '["62453682"]' },
+        { key: 'mediaAssetId', type: 'text', required: false, label: '등록 이미지', hint: '프로젝트에 등록한 PNG·JPEG. /asset/upload 후 SHA1 해시로 중복을 막습니다.' },
+        { key: 'status', type: 'select', required: false, label: '상태', options: [{ value: 'PAUSED', label: 'PAUSED (기본)' }, { value: 'LIVE', label: 'LIVE' }] },
+        { key: 'languages', type: 'text', required: false, label: '언어', placeholder: 'ENGLISH,KOREAN' },
+        { key: 'countries', type: 'text', required: false, label: '국가', placeholder: 'US,KR' },
+      ],
+      'update-creative': [
+        { key: 'creativeSetId', type: 'text', required: true, label: '소재 세트 ID' },
+        { key: 'name', type: 'text', required: false, label: '이름' },
+        { key: 'status', type: 'select', required: false, label: '상태', options: [{ value: 'PAUSED', label: 'PAUSED' }, { value: 'LIVE', label: 'LIVE' }] },
+        { key: 'assetIds', type: 'textarea', required: false, label: 'asset ID JSON 배열(전체 교체)', hint: '비우면 기존 asset 유지. mediaAssetId는 기존 목록에 추가합니다.' },
+        { key: 'mediaAssetId', type: 'text', required: false, label: '추가할 등록 이미지' },
+        { key: 'languages', type: 'text', required: false, label: '언어' },
+        { key: 'countries', type: 'text', required: false, label: '국가' },
+      ],
       'create-campaign': [
         { key: 'name', type: 'text', required: true, label: '캠페인 이름' },
         { key: 'activation', type: 'select', required: true, label: '생성 시 활성', options: [{ value: 'LIVE', label: 'LIVE (생성 직후 집행 가능)' }], hint: '공식 create는 status를 무시합니다. PAUSED 초안은 원자적으로 만들 수 없어 LIVE만 명시합니다. 생성 후 자동 pause는 하지 않습니다.' },
@@ -292,6 +360,11 @@ export const applovinAdsConnector: Connector = {
       '기존 캠페인의 update는 LIVE/PAUSED를 공식 계약대로 변경합니다.',
       '예산 필드는 USD 십진 금액입니다. UI의 dailyBudgetMicros를 1,000,000으로 나눕니다.',
       '보고는 UTC이며 최근 45일 창입니다. 미귀속 매출로 ROAS를 만들지 않습니다.',
+      'campaign-attribution과 sync는 캠페인·일자별 spend(cost)·installs(conversions)·clicks·impressions와, day_column=day cohort 보고의 total_rev_0d/1d/3d/7d/14d/28d를 revenue(gross_conversion_value, 귀속 창=cohort 일수)로 남깁니다. 끝나지 않은 cohort 창은 남기지 않습니다. 수익 통화 USD와 total_rev의 총매출 기준은 공식 문서에 명시되지 않아 가정입니다.',
+      'sync에서 cohort 보고가 거부되면(allowlist·열 미지원) 광고비·설치 fact는 남기고 summary.cohortRevenue=unavailable로 표시합니다. campaign-attribution 작업은 거부를 그대로 실패로 보고합니다.',
+      '소재 세트(creative set)는 /creative_set/list·list_by_campaign_id·create·update를 사용합니다. 생성은 기본 PAUSED이며 HOSTED_HTML 또는 IMG_INTER_P+동영상 구성과 거부되지 않은 asset을 전송 전에 확인합니다. 등록 이미지만으로는 소재 세트를 만들 수 없습니다.',
+      '이미지 업로드는 /asset/upload(multipart files)이며 비동기 처리입니다. 업로드 전 /asset/list의 asset_hash(SHA1)로 같은 이미지를 찾아 재사용합니다. 처리 중이면 waiting_external로 두고 같은 입력의 재실행이 이어서 진행합니다. 업로드 이미지의 asset_type(IMG_INTER_P 등) 판정 기준은 공식 문서에 없습니다.',
+      'clone·add-to-campaigns·remove 계열 소재 세트/asset 작업은 제공하지 않습니다.',
     ],
   },
   async execute(operation, input, ctx) {
@@ -304,12 +377,22 @@ export const applovinAdsConnector: Connector = {
     if (operation === 'sync') {
       const listed = await listCampaigns(ctx);
       let spend: ConnectorResult = { summary: {}, metrics: [] };
-      try { spend = await spendMetrics(ctx); }
-      catch (error) {
+      let attributed: ConnectorResult = { summary: {}, attribution: [] };
+      try {
+        spend = await spendMetrics(ctx);
+        attributed = await campaignAttribution({}, ctx, { cohortStart: daysAgo(REPORT_WINDOW_DAYS - 1), tolerateCohortRejection: true });
+      } catch (error) {
         if ((error as AppError).code !== 'AUTH_REQUIRED') throw error;
       }
-      return { resources: listed.resources, resourceSnapshots: listed.resourceSnapshots, metrics: spend.metrics, summary: { ...listed.summary, spendRows: spend.metrics?.length ?? 0 } };
+      return { resources: listed.resources, resourceSnapshots: listed.resourceSnapshots, metrics: spend.metrics, attribution: attributed.attribution,
+        summary: { ...listed.summary, spendRows: spend.metrics?.length ?? 0, attributionFacts: attributed.attribution?.length ?? 0,
+          ...(attributed.summary.cohortRevenue ? { cohortRevenue: attributed.summary.cohortRevenue } : {}) } };
     }
+    if (operation === 'campaign-attribution') return campaignAttribution(input, ctx);
+    if (operation === 'list-creatives') return listCreatives(input, ctx);
+    if (operation === 'create-creative') return createCreative(input, ctx);
+    if (operation === 'update-creative') return updateCreative(input, ctx);
+    if (operation === 'reconcile' && input.uploadId !== undefined) return reconcileUpload(input, ctx);
     if (operation === 'create-campaign') return createCampaign(input, ctx);
     if (operation === 'update-campaign') return updateCampaign(input, ctx);
     if (operation === 'pause-campaign') return updateCampaign({ externalId: input.externalId, status: 'PAUSED' }, ctx);

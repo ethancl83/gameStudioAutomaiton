@@ -24,6 +24,18 @@ export const AGENT_TOOLS = [
     connectionId: string, operation: string, input: { type: 'object', additionalProperties: true },
   }, ['connectionId', 'operation']),
   tool('run_result', 'Wait up to 20 seconds for one of this task’s queued store operations. Query unresolved results; never resend blindly.', { runId: string }, ['runId']),
+  tool('growth_context', 'Read growth operations for this project: mandates, statistical policy, experiments, decisions with evidence, ROAS/net ROI reports with not-computable reasons, provider experiment capabilities, customer-response and issue summaries. No raw posts or author identifiers.'),
+  tool('propose_mandate', 'Record a PROPOSED growth operation mandate from the user\'s explicit request (scope, accounts, allowed actions, goals, absolute limits, period). It never activates: the user must confirm it in the app. Reuse saved project policy values instead of asking. Actions: observe, ads-experiment, ads-scale, ads-stop, max-experiment, pricing-proposal, pricing-change, community-draft, community-reply, community-recall, feedback-triage.', {
+    actions: { type: 'array', items: string }, connectionIds: { type: 'array', items: string }, endsAt: string, startsAt: string, cadenceMinutes: { type: 'integer' },
+    goals: { type: 'object', additionalProperties: true }, limits: { type: 'object', additionalProperties: true }, requestText: string,
+  }, ['actions', 'endsAt', 'requestText']),
+  tool('propose_experiment', 'Draft a pre-registered experiment under an existing mandate: one main change, control + treatment arms, primary metric, guardrails, minimum effect, attribution window, min/max duration, min sample per arm. The user registers and starts it in the app. Campaign comparisons without provider randomization are recorded as observational comparisons, never A/B.', {
+    mandateId: string, kind: { enum: ['ads', 'monetization', 'pricing', 'product'] }, connectionId: string, design: { enum: ['native_ab', 'observational_comparison'] },
+    hypothesis: { type: 'object', additionalProperties: true }, arms: { type: 'array', items: { type: 'object', additionalProperties: true } }, stopping: { type: 'object', additionalProperties: true }, providerExperimentId: string,
+  }, ['mandateId', 'kind', 'connectionId', 'hypothesis', 'arms']),
+  tool('save_knowledge', 'Save a DRAFT knowledge document (FAQ, support policy, changelog, known issue) for customer responses. Only facts from project files or saved store copy. The user approves it before any reply may cite it.', {
+    documentKey: string, sourceKind: { enum: ['store_listing', 'faq', 'support_policy', 'changelog', 'known_issue', 'analysis'] }, title: string, body: string, sourceRef: string,
+  }, ['documentKey', 'sourceKind', 'title', 'body']),
   tool('progress', 'Record a short Korean progress update after meaningful work. Do not include source text, tokens or private keys.', { message: string }, ['message']),
   tool('ask_user', 'Only after completing independent work: request login/MFA/contract, missing tools, or a necessary fact that cannot be found. Do not ask users to fill discoverable IDs or store copy. Exit after recording the question.', {
     message: string, kind: { enum: ['login', 'information', 'tooling'] }, url: string,

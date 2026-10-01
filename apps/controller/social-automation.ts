@@ -111,7 +111,7 @@ export class SocialAutomation {
       if (!connection || connection.provider !== 'steam' || !this.actions.supported('steam', 'list-news')) continue;
       const key = 'social-news:' + project.id + ':' + id;
       if (this.clock() - (this.store.get<{ at: number }>('settings', key)?.at ?? 0) < 3_600_000) continue;
-      if (this.store.runs(10_000).some(run => run.connectionId === id && run.kind === 'list-news' && ['queued', 'running', 'retry_wait'].includes(run.status))) continue;
+      if (this.store.hasRuns({ connectionId: id, kinds: ['list-news'], statuses: ['queued', 'running', 'retry_wait'] })) continue;
       try { this.actions.action(id, { operation: 'list-news', projectId: project.id, input: {} }); this.store.put('settings', key, { at: this.clock() }); }
       catch (error) { this.waiting(key, project.id, error); }
     }

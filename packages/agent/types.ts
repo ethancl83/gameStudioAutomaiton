@@ -28,6 +28,8 @@ export interface AgentTask {
   sessionId?: string;
   sessionStarted?: boolean;
   sessionGeneration: string;
+  /** clear 전 native 세션 감사 기록. 이 ID들은 다시 resume하지 않는다. */
+  clearedSessions?: Array<{ provider: AgentProvider; sessionId: string; clearedAt: string }>;
   requestContext?: AgentRequestContext;
   status: 'idle' | 'queued' | 'running' | 'needs_user' | 'failed' | 'cancelled' | 'completed';
   message: string;
@@ -39,6 +41,8 @@ export interface AgentTask {
   createdAt: string;
   updatedAt: string;
 }
-export type AgentScreen = 'agent' | 'dashboard' | 'setup' | 'projects' | 'connections' | 'releases' | 'marketing' | 'monetization' | 'community' | 'operations' | 'history' | 'settings' | 'development' | 'web-deployments';
-export interface AgentRequestContext { screen: AgentScreen; projectId?: string; connectionId?: string }
+export type AgentScreen = 'agent' | 'dashboard' | 'setup' | 'projects' | 'connections' | 'releases' | 'marketing' | 'monetization' | 'community' | 'operations' | 'history' | 'settings' | 'development' | 'web-deployments' | 'growth';
+/** 화면 선택 항목의 표시용 스냅샷. 권한이 아니라 요청 맥락이며, revision이 바뀌었으면 stale로 표시한다. */
+export interface AgentSelection { kind: 'project' | 'connection' | 'run' | 'experiment' | 'mandate' | 'response' | 'cluster' | 'resource' | 'knowledge' | 'incident' | 'product-link' | 'pricing'; id: string; label: string; revision?: string }
+export interface AgentRequestContext { screen: AgentScreen; projectId?: string; connectionId?: string; selection?: AgentSelection; stale?: boolean; staleReason?: string }
 export interface AgentState { settings: AgentSettings; runtimes: AgentRuntime[]; tasks: AgentTask[] }

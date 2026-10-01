@@ -414,6 +414,8 @@ test('apple sync aggregates developer proceeds per currency and skips missing re
       if (salesCalls === 2) return gzipSync(Buffer.from(tsv, 'utf8'));
       throw new AppError('RESOURCE_NOT_FOUND', 'no more', 404);
     }
+    // Monthly settlement reports are covered in tests/store-gaps.test.ts.
+    if (url.includes('/v1/financeReports')) throw new AppError('RESOURCE_NOT_FOUND', 'not generated', 404);
     throw new Error(url);
   };
   const { context } = await createContext({
@@ -645,6 +647,7 @@ test('steam upload-build enforces trusted configuration and refuses public track
 test('steam sync pages GetDetailedSales per date and reports USD net sales as estimated', async () => {
   const salesByCall: Array<{ results?: Array<Record<string, unknown>>; max_id?: number }> = [];
   const handler = (url: string): unknown => {
+    if (url.includes('GetChangedDatesForPartner')) return { response: { dates: [], result_highwatermark: '5' } };
     if (!url.includes('GetDetailedSales')) throw new Error(url);
     const parsed = new URL(url);
     assert.equal(parsed.searchParams.get('key'), 'FINKEY');

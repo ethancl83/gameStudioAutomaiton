@@ -4,13 +4,13 @@ import { fileURLToPath } from 'node:url';
 
 // Only application source is copied from these trees, never runtime data or dependencies.
 export const RUNNER_SOURCE_DIRECTORIES = [
-  'apps/runner', 'packages/build-credentials', 'packages/domain', 'packages/engines',
+  'apps/runner', 'packages/runner', 'packages/build-credentials', 'packages/domain', 'packages/engines',
   'packages/inspection', 'packages/remote-runner', 'packages/metrics',
   'packages/credentials', 'packages/storage',
 ];
 export const RUNNER_CONTEXT_FILES = [
   'package.json', 'package-lock.json', 'tsconfig.json', '.dockerignore',
-  'apps/controller/validation.ts', 'packages/connectors/types.ts',
+  'packages/connectors/types.ts',
   'docker/runner/Dockerfile',
   'docker/runner/start.sh', 'docker/runner/install-godot.sh',
   'docker/runner/healthcheck.mjs', 'docker/runner/seccomp-bwrap.json',
